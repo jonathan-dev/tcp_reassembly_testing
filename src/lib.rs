@@ -1,16 +1,28 @@
 mod reassembler;
+
+struct MyListener;
+
+impl reassembler::Listener for MyListener {
+    fn notify(&self, _event: &reassembler::Event) {
+        println!("received event!!!");
+    }
+}
 #[cfg(test)]
 mod tests {
+    use crate::reassembler;
     use pcap_parser::traits::PcapReaderIterator;
     use pcap_parser::*;
     use pdu::*;
     use std::fs::File;
+    use std::rc::Rc;
 
     #[test]
     fn it_works() {
         let file =
             File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
         let mut num_blocks = 0;
+        let rc: Rc<dyn reassembler::Listener> = Rc::new(super::MyListener {});
+        let mut reassembler = reassembler::Reassembler::new(&rc);
         let mut reader = LegacyPcapReader::new(65536, file).expect("LegacyPcapReader");
         loop {
             match reader.next() {
@@ -30,24 +42,10 @@ mod tests {
                             // parse tcp
                             match EthernetPdu::new(_b.data) {
                                 Ok(ethernet_pdu) => {
-                                    println!(
-                                        "[ethernet] destination_address: {:x?}",
-                                        ethernet_pdu.destination_address().as_ref()
-                                    );
-                                    println!(
-                                        "[ethernet] source_address: {:x?}",
-                                        ethernet_pdu.source_address().as_ref()
-                                    );
-                                    println!(
-                                        "[ethernet] ethertype: 0x{:04x}",
-                                        ethernet_pdu.ethertype()
-                                    );
-                                    if let Some(vlan) = ethernet_pdu.vlan() {
-                                        println!("[ethernet] vlan: 0x{:04x}", vlan);
-                                    }
                                     // upper-layer protocols can be accessed via the inner() method
                                     match ethernet_pdu.inner() {
                                         Ok(Ethernet::Ipv4(ipv4_pdu)) => {
+                                            reassembler.process(ipv4_pdu);
                                             println!(
                                                 "[ipv4] source_address: {:x?}",
                                                 ipv4_pdu.source_address().as_ref()
@@ -67,6 +65,11 @@ mod tests {
                                                         tcp_pdu.sequence_number()
                                                     );
                                                     println!("[tcp] flags: {}", tcp_pdu.flags());
+                                                    println!(
+                                                        "[tcp] src port: {} dst port: {}",
+                                                        tcp_pdu.source_port(),
+                                                        tcp_pdu.destination_port()
+                                                    );
                                                 }
                                                 Ok(_) => {
                                                     println!("unsupported protocol");
