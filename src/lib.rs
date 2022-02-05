@@ -1,3 +1,4 @@
+#![feature(map_first_last)]
 mod reassembler;
 
 struct MyListener;
@@ -5,6 +6,12 @@ struct MyListener;
 impl reassembler::Listener for MyListener {
     fn notify(&self, _event: &reassembler::Event) {
         println!("received event!!!");
+    }
+    fn accept_tcp(&self, bytes: Vec<u8>) {
+        match String::from_utf8(bytes) {
+            Ok(s) => println!("___listener received___ : {}", s),
+            Err(e) => println!("{}", e),
+        }
     }
 }
 #[cfg(test)]

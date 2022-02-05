@@ -1,11 +1,14 @@
+#![allow(dead_code)]
 use pdu::Tcp;
 use pdu::*;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
+use std::str;
 
 struct TcpStream {
-    delayed: HashMap<u32, Vec<u8>>,
+    delayed: BTreeMap<u32, Vec<u8>>,
     next_seq: u32,
     listener: Weak<dyn Listener>,
 }
@@ -13,33 +16,93 @@ struct TcpStream {
 impl TcpStream {
     fn new(listener: &Rc<dyn Listener>) -> TcpStream {
         TcpStream {
-            delayed: HashMap::new(),
+            delayed: BTreeMap::new(),
             next_seq: 11,
             listener: Rc::downgrade(&listener),
         }
     }
     fn add(&mut self, packet: pdu::TcpPdu) {
-        if packet.sequence_number() == self.next_seq {
-            println!("===flags=== {}", packet.flags());
-            if let Tcp::Raw(data) = packet.inner().unwrap() {
-                self.next_seq = self.next_seq + data.len() as u32;
-                // TODO: check delayed
-            }
-        } else {
-            if let Tcp::Raw(data) = packet.inner().unwrap() {
-                println!("data {:?}", data);
-                self.delayed.insert(packet.sequence_number(), data.to_vec());
+        if packet.psh() {
+            if packet.sequence_number() == self.next_seq {
+                //packet in order
+                println!("===flags=== {}", packet.flags());
+                let Tcp::Raw(data) = packet.inner().unwrap();
+                if let Ok(s) = str::from_utf8(data) {
+                    println!("data: {}", s);
+                }
+                self.accept_packet(packet);
+                self.next_seq += data.len() as u32;
+                println!("next_seq updated {}", self.next_seq);
+                self.check_delayed();
+            } else {
+                // out of order packet
+                self.delayed
+                    .insert(packet.sequence_number(), packet.into_buffer().to_vec());
             }
         }
     }
 
+    fn accept_packet(&mut self, packet: pdu::TcpPdu) {
+        println!(
+            "overlap calc {} - {}",
+            self.next_seq,
+            packet.sequence_number()
+        );
+        let vec;
+        let overlap = self.next_seq - packet.sequence_number();
+        if let Ok(Tcp::Raw(data)) = packet.inner() {
+            if overlap > 0 {
+                if overlap > data.len() as u32 {
+                    vec = Vec::new();
+                } else {
+                    let choosen_data = &data[overlap as usize..];
+                    println!("choosen data: {:?} overlap: {}", choosen_data, overlap);
+                    vec = choosen_data.to_vec();
+                }
+            } else {
+                // adjust packet content
+                vec = data.to_vec();
+            }
+            let num_bytes = vec.len();
+            if let Some(l) = self.listener.upgrade() {
+                l.accept_tcp(vec)
+            }
+            self.next_seq += num_bytes as u32;
+        }
+
+        if let Some(l) = self.listener.upgrade() {
+            // l.notify(event);
+        }
+    }
+
     fn check_delayed(&mut self) {
-        // TODO: consider using BTreeMap for auto sorted iteration
-        self.delayed.iter();
+        let mut found_something = false;
+        if let Some(entry) = self.delayed.first_entry() {
+            if entry.key() <= &self.next_seq {
+                //TODO: accept data
+                found_something = true;
+                println!("found entry: {:?}", entry);
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+        if found_something {
+            let p = self.delayed.pop_first();
+            match p {
+                Some(raw_packet) => {
+                    let packet = pdu::TcpPdu::new(&raw_packet.1).unwrap();
+                    self.accept_packet(packet);
+                }
+                None => {}
+            }
+        }
+        self.check_delayed();
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 struct FlowKey {
     src_ip: [u8; 4],
     dst_ip: [u8; 4],
@@ -56,6 +119,7 @@ pub struct Event;
 
 pub trait Listener {
     fn notify(&self, event: &Event);
+    fn accept_tcp(&self, bytes: Vec<u8>);
 }
 
 impl Reassembler {
@@ -73,10 +137,9 @@ impl Reassembler {
                 dst_ip: ip_packet.destination_address(),
                 dst_port: tcp_packet.destination_port(),
             };
-            let cur_stream = self
-                .streams
-                .entry(key)
-                .or_insert(TcpStream::new(&self.listener.upgrade().unwrap()));
+            let listener = &self.listener.upgrade().unwrap();
+            let stream = TcpStream::new(listener);
+            let cur_stream = self.streams.entry(key.clone()).or_insert(stream);
             cur_stream.add(tcp_packet);
         }
 
@@ -91,22 +154,6 @@ impl Reassembler {
             None => println!("no listener"),
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::reassembler::Event;
-    use crate::reassembler::Listener;
-    use crate::reassembler::Reassembler;
-    use std::rc::Rc;
-    //   #[test]
-    //   fn test_listener() {
-    //       let rc: Rc<dyn Listener> = Rc::new(MyListener {});
-    //       let r = Reassembler::new(&rc);
-    //       println!("===test_listener===");
-    //       r.dispatch(&Event {});
-    //       //r.init(m);
-    //   }
 }
 
 // TODO: how to deal with wrapping sequence numbers
