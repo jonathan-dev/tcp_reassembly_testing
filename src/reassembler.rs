@@ -3,12 +3,15 @@ use pdu::Tcp;
 use pdu::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::rc::Weak;
 use std::str;
 
+/// TcpStream
+/// delayed is able to store multiple data chunks with the same sequence number
 struct TcpStream {
-    delayed: BTreeMap<u32, Vec<u8>>,
+    delayed: BTreeMap<u32, Vec<Vec<u8>>>,
     next_seq: u32,
     listener: Weak<dyn Listener>,
 }
@@ -37,7 +40,10 @@ impl TcpStream {
             } else {
                 // out of order packet
                 self.delayed
-                    .insert(packet.sequence_number(), packet.into_buffer().to_vec());
+                    .entry(packet.sequence_number())
+                    .or_default()
+                    .push(packet.into_buffer().to_vec());
+                //.insert(packet.sequence_number(), packet.into_buffer().to_vec());
             }
         }
     }
@@ -91,8 +97,12 @@ impl TcpStream {
         if found_something {
             let p = self.delayed.pop_first();
             match p {
-                Some(raw_packet) => {
-                    let packet = pdu::TcpPdu::new(&raw_packet.1).unwrap();
+                Some(mut data_chuncks) => {
+                    let chunk = data_chuncks.1.remove(0);
+                    if !data_chuncks.1.is_empty() {
+                        self.delayed.insert(data_chuncks.0, data_chuncks.1);
+                    }
+                    let packet = pdu::TcpPdu::new(&chunk).unwrap();
                     self.accept_packet(packet);
                 }
                 None => {}
