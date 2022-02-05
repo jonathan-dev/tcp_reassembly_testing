@@ -34,73 +34,19 @@ mod tests {
         loop {
             match reader.next() {
                 Ok((offset, block)) => {
-                    println!("got new block");
                     num_blocks += 1;
                     match block {
-                        PcapBlockOwned::LegacyHeader(_hdr) => {
-                            // save hdr.network (linktype)
-                            // println!("Magicnumber: {:X}", _hdr.magic_number);
-                            //                           println!("Header: {:?}", _hdr);
-                        }
+                        PcapBlockOwned::LegacyHeader(_hdr) => {}
                         PcapBlockOwned::Legacy(_b) => {
-                            // use linktype to parse b.data()
-                            //                            println!("Block: {:?}", _b);
-                            // parse ipv4
-                            // parse tcp
                             match EthernetPdu::new(_b.data) {
                                 Ok(ethernet_pdu) => {
                                     // upper-layer protocols can be accessed via the inner() method
                                     match ethernet_pdu.inner() {
                                         Ok(Ethernet::Ipv4(ipv4_pdu)) => {
                                             reassembler.process(ipv4_pdu);
-                                            println!(
-                                                "[ipv4] source_address: {:x?}",
-                                                ipv4_pdu.source_address().as_ref()
-                                            );
-                                            println!(
-                                                "[ipv4] destination_address: {:x?}",
-                                                ipv4_pdu.destination_address().as_ref()
-                                            );
-                                            println!(
-                                                "[ipv4] protocol: 0x{:02x}",
-                                                ipv4_pdu.protocol()
-                                            );
-                                            match ipv4_pdu.inner() {
-                                                Ok(Ipv4::Tcp(tcp_pdu)) => {
-                                                    println!(
-                                                        "[tcp] seq: {}",
-                                                        tcp_pdu.sequence_number()
-                                                    );
-                                                    println!("[tcp] flags: {}", tcp_pdu.flags());
-                                                    println!(
-                                                        "[tcp] src port: {} dst port: {}",
-                                                        tcp_pdu.source_port(),
-                                                        tcp_pdu.destination_port()
-                                                    );
-                                                }
-                                                Ok(_) => {
-                                                    println!("unsupported protocol");
-                                                }
-                                                Err(e) => {
-                                                    println!("an error occured: {:x?}", e);
-                                                }
-                                            }
-                                            // upper-layer protocols can be accessed via the inner() method (not shown)
                                         }
-                                        Ok(Ethernet::Ipv6(ipv6_pdu)) => {
-                                            println!(
-                                                "[ipv6] source_address: {:x?}",
-                                                ipv6_pdu.source_address().as_ref()
-                                            );
-                                            println!(
-                                                "[ipv6] destination_address: {:x?}",
-                                                ipv6_pdu.destination_address().as_ref()
-                                            );
-                                            println!(
-                                                "[ipv6] protocol: 0x{:02x}",
-                                                ipv6_pdu.computed_protocol()
-                                            );
-                                            // upper-layer protocols can be accessed via the inner() method (not shown)
+                                        Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
+                                            unimplemented!();
                                         }
                                         Ok(other) => {
                                             panic!("Unexpected protocol {:?}", other);
