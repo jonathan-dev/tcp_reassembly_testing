@@ -59,7 +59,9 @@ impl TcpStream {
             self.next_seq += num_bytes as u32;
 
             if let Some(l) = self.listener.upgrade() {
-                l.accept_tcp(vec)
+                if !vec.is_empty() {
+                    l.accept_tcp(vec)
+                }
             }
         }
     }
@@ -104,7 +106,6 @@ pub struct Reassembler {
 pub struct Event;
 
 pub trait Listener {
-    fn notify(&self, event: &Event);
     fn accept_tcp(&self, bytes: Vec<u8>);
 }
 
@@ -127,12 +128,6 @@ impl Reassembler {
             let stream = TcpStream::new(listener);
             let cur_stream = self.streams.entry(key.clone()).or_insert(stream);
             cur_stream.add(tcp_packet);
-        }
-    }
-    pub fn dispatch(&self, event: &Event) {
-        match self.listener.upgrade() {
-            Some(l) => l.notify(event),
-            None => println!("no listener"),
         }
     }
 }

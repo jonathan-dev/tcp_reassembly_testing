@@ -4,12 +4,9 @@ mod reassembler;
 struct MyListener;
 
 impl reassembler::Listener for MyListener {
-    fn notify(&self, _event: &reassembler::Event) {
-        println!("received event!!!");
-    }
     fn accept_tcp(&self, bytes: Vec<u8>) {
         match String::from_utf8(bytes) {
-            Ok(s) => println!("___listener received___ : {}", s),
+            Ok(s) => print!("{}", s),
             Err(e) => println!("{}", e),
         }
     }
@@ -27,14 +24,12 @@ mod tests {
     fn it_works() {
         let file =
             File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
-        let mut num_blocks = 0;
         let rc: Rc<dyn reassembler::Listener> = Rc::new(super::MyListener {});
         let mut reassembler = reassembler::Reassembler::new(&rc);
         let mut reader = LegacyPcapReader::new(65536, file).expect("LegacyPcapReader");
         loop {
             match reader.next() {
                 Ok((offset, block)) => {
-                    num_blocks += 1;
                     match block {
                         PcapBlockOwned::LegacyHeader(_hdr) => {}
                         PcapBlockOwned::Legacy(_b) => {
@@ -72,7 +67,6 @@ mod tests {
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
-        println!("num_blocks: {}", num_blocks);
         assert_eq!(2 + 2, 4);
     }
 }
