@@ -1,6 +1,19 @@
 #![feature(map_first_last)]
 mod reassembler;
 
+// configuration option:
+// - file
+// - connection
+//
+use pcap_parser::traits::PcapReaderIterator;
+use pcap_parser::*;
+use pdu::*;
+use std::cell::RefCell;
+use std::fs::File;
+use std::process::exit;
+use std::rc::Rc;
+use std::str;
+
 struct MyListener {
     data: Vec<u8>,
 }
@@ -18,24 +31,21 @@ impl reassembler::Listener for MyListener {
         }
     }
 }
-#[cfg(test)]
-mod tests {
-    use crate::reassembler;
-    use pcap_parser::traits::PcapReaderIterator;
-    use pcap_parser::*;
-    use pdu::*;
-    use std::cell::RefCell;
-    use std::fs::File;
-    use std::rc::Rc;
-    use std::str;
 
-    #[test]
-    fn it_works() {
-        let file =
-            File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
-        let listener = super::MyListener { data: Vec::new() };
-        let l = Rc::new(RefCell::new(listener));
-        let rc = Rc::clone(&l) as Rc<RefCell<dyn reassembler::Listener>>;
+pub struct PcapReassembler {}
+
+impl PcapReassembler {
+    pub fn read_file(file: &str, listener: Rc<RefCell<dyn reassembler::Listener>>) {
+        // let file =
+        //     File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
+        let file = match File::open(file) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("{}", e);
+                exit(1);
+            }
+        };
+        let rc = Rc::clone(&listener);
         let mut reassembler = reassembler::Reassembler::new(&rc);
         let mut reader = LegacyPcapReader::new(65536, file).expect("LegacyPcapReader");
         loop {
@@ -78,6 +88,21 @@ mod tests {
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::reassembler::Listener;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::str;
+
+    #[test]
+    fn it_works() {
+        let l = Rc::new(RefCell::new(super::MyListener { data: Vec::new() }));
+        let file_name = "/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap";
+        super::PcapReassembler::read_file(file_name, Rc::clone(&l) as Rc<RefCell<dyn Listener>>);
         let data = &Rc::clone(&l);
         assert_eq!(
             str::from_utf8(&data.borrow().data[..]).unwrap(),

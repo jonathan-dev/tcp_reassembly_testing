@@ -23,6 +23,7 @@ impl TcpStream {
             listener: Rc::downgrade(&listener),
         }
     }
+
     fn add(&mut self, packet: pdu::TcpPdu) {
         if packet.psh() {
             if packet.sequence_number() == self.next_seq {
