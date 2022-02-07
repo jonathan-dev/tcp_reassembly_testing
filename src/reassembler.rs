@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use pdu::Tcp;
 use pdu::*;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -11,11 +12,11 @@ use std::rc::Weak;
 struct TcpStream {
     delayed: BTreeMap<u32, Vec<Vec<u8>>>,
     next_seq: u32,
-    listener: Weak<dyn Listener>,
+    listener: Weak<RefCell<dyn Listener>>,
 }
 
 impl TcpStream {
-    fn new(listener: &Rc<dyn Listener>) -> TcpStream {
+    fn new(listener: &Rc<RefCell<dyn Listener>>) -> TcpStream {
         TcpStream {
             delayed: BTreeMap::new(),
             next_seq: 11,
@@ -60,7 +61,7 @@ impl TcpStream {
 
             if let Some(l) = self.listener.upgrade() {
                 if !vec.is_empty() {
-                    l.accept_tcp(vec)
+                    l.borrow_mut().accept_tcp(vec)
                 }
             }
         }
@@ -100,17 +101,17 @@ struct FlowKey {
 
 pub struct Reassembler {
     streams: HashMap<FlowKey, TcpStream>,
-    listener: Weak<dyn Listener>,
+    listener: Weak<RefCell<dyn Listener>>,
 }
 
 pub struct Event;
 
 pub trait Listener {
-    fn accept_tcp(&self, bytes: Vec<u8>);
+    fn accept_tcp(&mut self, bytes: Vec<u8>);
 }
 
 impl Reassembler {
-    pub fn new(listener: &Rc<dyn Listener>) -> Reassembler {
+    pub fn new(listener: &Rc<RefCell<dyn Listener>>) -> Reassembler {
         Reassembler {
             listener: Rc::downgrade(&listener),
             streams: HashMap::new(),
