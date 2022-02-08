@@ -127,8 +127,8 @@ impl Reassembler {
                 dst_port: tcp_packet.destination_port(),
             };
             let listener = &self.listener.upgrade().unwrap();
-            let stream = TcpStream::new(listener);
-            let cur_stream = self.streams.entry(key.clone()).or_insert(stream);
+            // let stream = TcpStream::new(listener);
+            let cur_stream = self.streams.entry(key).or_insert(TcpStream::new(listener));
             cur_stream.add(tcp_packet);
         }
     }
