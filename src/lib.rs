@@ -9,19 +9,21 @@ use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::*;
 use pdu::*;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::process::exit;
 use std::rc::Rc;
 use std::str;
 
 struct MyListener {
-    data: Vec<u8>,
+    data: HashMap<reassembler::FlowKey, Vec<u8>>,
 }
 
 impl reassembler::Listener for MyListener {
-    fn accept_tcp(&mut self, bytes: Vec<u8>) {
+    fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: reassembler::FlowKey) {
+        let stream_bytes = self.data.entry(stream_key).or_default();
         for byte in bytes.clone().into_iter() {
-            self.data.push(byte);
+            stream_bytes.push(byte);
         }
         match String::from_utf8(bytes) {
             Ok(s) => {
@@ -93,20 +95,31 @@ impl PcapReassembler {
 
 #[cfg(test)]
 mod tests {
-    use crate::reassembler::Listener;
+    use crate::reassembler::{FlowKey, Listener};
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
     use std::str;
 
     #[test]
     fn it_works() {
-        let l = Rc::new(RefCell::new(super::MyListener { data: Vec::new() }));
+        let l = Rc::new(RefCell::new(super::MyListener {
+            data: HashMap::new(),
+        }));
         let file_name = "/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap";
         super::PcapReassembler::read_file(file_name, Rc::clone(&l) as Rc<RefCell<dyn Listener>>);
         let data = &Rc::clone(&l);
-        assert_eq!(
-            str::from_utf8(&data.borrow().data[..]).unwrap(),
-            "0AAAJJBCCCLLLMMMFFFGGHHIQ"
-        );
+        println!("{:?}", &data.borrow().data);
+        if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
+            src_ip: [127, 0, 0, 1],
+            src_port: 6000,
+            dst_ip: [127, 0, 0, 1],
+            dst_port: 6001,
+        }) {
+            assert_eq!(
+                str::from_utf8(&stream_data[..]).unwrap(),
+                "0AAAJJBCCCLLLMMMFFFGGHHIQ"
+            );
+        };
     }
 }

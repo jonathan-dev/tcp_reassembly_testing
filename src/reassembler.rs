@@ -6,18 +6,19 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::rc::Weak;
-
 /// TcpStream
 /// delayed is able to store multiple data chunks with the same sequence number
 struct TcpStream {
+    key: FlowKey,
     delayed: BTreeMap<u32, Vec<Vec<u8>>>,
     next_seq: u32,
     listener: Weak<RefCell<dyn Listener>>,
 }
 
 impl TcpStream {
-    fn new(listener: &Rc<RefCell<dyn Listener>>) -> TcpStream {
+    fn new(key: FlowKey, listener: &Rc<RefCell<dyn Listener>>) -> TcpStream {
         TcpStream {
+            key,
             delayed: BTreeMap::new(),
             next_seq: 11,
             listener: Rc::downgrade(&listener),
@@ -62,7 +63,7 @@ impl TcpStream {
 
             if let Some(l) = self.listener.upgrade() {
                 if !vec.is_empty() {
-                    l.borrow_mut().accept_tcp(vec)
+                    l.borrow_mut().accept_tcp(vec, self.key.clone())
                 }
             }
         }
@@ -92,12 +93,12 @@ impl TcpStream {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
-struct FlowKey {
-    src_ip: [u8; 4],
-    dst_ip: [u8; 4],
-    src_port: u16,
-    dst_port: u16,
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct FlowKey {
+    pub src_ip: [u8; 4],
+    pub dst_ip: [u8; 4],
+    pub src_port: u16,
+    pub dst_port: u16,
 }
 
 pub struct Reassembler {
@@ -108,7 +109,7 @@ pub struct Reassembler {
 pub struct Event;
 
 pub trait Listener {
-    fn accept_tcp(&mut self, bytes: Vec<u8>);
+    fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: FlowKey);
 }
 
 impl Reassembler {
@@ -128,7 +129,10 @@ impl Reassembler {
             };
             let listener = &self.listener.upgrade().unwrap();
             // let stream = TcpStream::new(listener);
-            let cur_stream = self.streams.entry(key).or_insert(TcpStream::new(listener));
+            let cur_stream = self
+                .streams
+                .entry(key.clone())
+                .or_insert(TcpStream::new(key, listener));
             cur_stream.add(tcp_packet);
         }
     }
