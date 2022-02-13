@@ -112,14 +112,16 @@ mod tests {
         println!("{:?}", &data.borrow().data);
         if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
             src_ip: [127, 0, 0, 1],
-            src_port: 6000,
+            src_port: 6001,
             dst_ip: [127, 0, 0, 1],
-            dst_port: 6001,
+            dst_port: 6000,
         }) {
             assert_eq!(
                 str::from_utf8(&stream_data[..]).unwrap(),
                 "0AAAJJBCCCLLLMMMFFFGGHHIQ"
             );
+            return;
         };
+        assert!(false);
     }
 }
