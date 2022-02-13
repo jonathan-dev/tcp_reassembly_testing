@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use pdu::Tcp;
 use pdu::*;
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
@@ -41,17 +40,33 @@ impl TcpStream {
     }
 
     fn add(&mut self, packet: pdu::TcpPdu) {
+        // set ack
+        if packet.ack() {
+            self.ack = packet.acknowledgement_number();
+        }
         if packet.syn() && matches!(self.state, TcpState::Closed) {
             self.next_seq = packet.sequence_number() + 1;
             self.state = TcpState::SynRcvd;
+            println!(
+                "{} -> {} +++ SynRcvd +++",
+                self.key.src_port, self.key.dst_port
+            );
         }
-        if packet.psh() {
+        if matches!(self.state, TcpState::SynRcvd) {
             if let Some(partner) = &self.partner {
                 // partner available
                 let partner_seq = partner.upgrade().unwrap().borrow_mut().next_seq;
-                println!("-----------------{}", partner_seq);
+                if partner_seq == self.ack {
+                    // do this in reverse!!!
+                    self.state = TcpState::Estab;
+                    println!(
+                        "{} -> {} +++ Connection established +++",
+                        self.key.src_port, self.key.dst_port
+                    );
+                }
             }
-
+        }
+        if packet.psh() && matches!(self.state, TcpState::Estab) {
             if packet.sequence_number() == self.next_seq {
                 //packet in order
                 self.accept_packet(packet);
