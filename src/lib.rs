@@ -98,6 +98,7 @@ mod tests {
     use crate::reassembler::{FlowKey, Listener};
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::net::Ipv4Addr;
     use std::rc::Rc;
     use std::str;
 
@@ -111,10 +112,8 @@ mod tests {
         let data = &Rc::clone(&l);
         println!("{:?}", &data.borrow().data);
         if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
-            src_ip: [127, 0, 0, 1],
-            src_port: 6001,
-            dst_ip: [127, 0, 0, 1],
-            dst_port: 6000,
+            src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
+            dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
         }) {
             assert_eq!(
                 str::from_utf8(&stream_data[..]).unwrap(),

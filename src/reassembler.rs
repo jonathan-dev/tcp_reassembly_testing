@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::rc::Weak;
 
@@ -45,12 +46,10 @@ impl TcpStream {
             self.ack = packet.acknowledgement_number();
         }
         if packet.syn() && matches!(self.state, TcpState::Closed) {
+            // TODO: use wrapping add!
             self.next_seq = packet.sequence_number() + 1;
             self.state = TcpState::SynRcvd;
-            println!(
-                "{} -> {} +++ SynRcvd +++",
-                self.key.src_port, self.key.dst_port
-            );
+            println!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
         }
         if matches!(self.state, TcpState::SynRcvd) {
             if let Some(partner) = &self.partner {
@@ -61,7 +60,7 @@ impl TcpStream {
                     self.state = TcpState::Estab;
                     println!(
                         "{} -> {} +++ Connection established +++",
-                        self.key.src_port, self.key.dst_port
+                        self.key.src.1, self.key.dst.1
                     );
                 }
             }
@@ -135,21 +134,15 @@ impl TcpStream {
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct FlowKey {
-    pub src_ip: [u8; 4],
-    pub dst_ip: [u8; 4],
-    pub src_port: u16,
-    pub dst_port: u16,
+    pub src: (Ipv4Addr, u16),
+    pub dst: (Ipv4Addr, u16),
 }
 
 impl FlowKey {
     fn swap_flow_key(&self) -> FlowKey {
-        let tmp_ip = self.src_ip;
-        let tmp_port = self.src_port;
         FlowKey {
-            src_ip: self.dst_ip,
-            src_port: self.dst_port,
-            dst_ip: tmp_ip,
-            dst_port: tmp_port,
+            dst: self.src,
+            src: self.dst,
         }
     }
 }
@@ -178,10 +171,14 @@ impl Reassembler {
     pub fn process(&mut self, ip_packet: Ipv4Pdu) {
         if let Ok(Ipv4::Tcp(tcp_packet)) = ip_packet.inner() {
             let key = FlowKey {
-                src_ip: ip_packet.source_address(),
-                src_port: tcp_packet.source_port(),
-                dst_ip: ip_packet.destination_address(),
-                dst_port: tcp_packet.destination_port(),
+                src: (
+                    Ipv4Addr::from(ip_packet.source_address()),
+                    tcp_packet.source_port(),
+                ),
+                dst: (
+                    Ipv4Addr::from(ip_packet.destination_address()),
+                    tcp_packet.destination_port(),
+                ),
             };
             let mut new_stream = false;
             let listener = &self.listener.upgrade().unwrap();
