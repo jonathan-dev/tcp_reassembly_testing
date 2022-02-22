@@ -1,4 +1,6 @@
 #![feature(map_first_last)]
+#![macro_use]
+mod debug;
 mod reassembler;
 
 // configuration option:
@@ -50,6 +52,7 @@ impl PcapReassembler {
         let rc = Rc::clone(&listener);
         let mut reassembler = reassembler::Reassembler::new(&rc);
         let mut reader = LegacyPcapReader::new(65536, file).expect("LegacyPcapReader");
+        let mut packet_num = 1;
         loop {
             match reader.next() {
                 Ok((offset, block)) => {
@@ -58,10 +61,22 @@ impl PcapReassembler {
                         PcapBlockOwned::Legacy(_b) => {
                             match EthernetPdu::new(_b.data) {
                                 Ok(ethernet_pdu) => {
+                                    packet_num += 1;
                                     // upper-layer protocols can be accessed via the inner() method
                                     match ethernet_pdu.inner() {
                                         Ok(Ethernet::Ipv4(ipv4_pdu)) => {
-                                            reassembler.process(ipv4_pdu);
+                                            if let Ok(Ipv4::Tcp(tcp_packet)) = ipv4_pdu.inner() {
+                                                let computed_checksum = tcp_packet
+                                                    .computed_checksum(&Ip::Ipv4(ipv4_pdu));
+                                                if tcp_packet.checksum() == computed_checksum {
+                                                    reassembler.process(ipv4_pdu);
+                                                } else {
+                                                    debug_print!(
+                                                        "encountered wrong checksum in packet {}!",
+                                                        packet_num
+                                                    );
+                                                }
+                                            }
                                         }
                                         Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
                                             unimplemented!();
