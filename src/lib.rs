@@ -1,7 +1,7 @@
 #![feature(map_first_last)]
 #![macro_use]
 mod debug;
-mod reassembler;
+pub mod reassembler;
 
 // configuration option:
 // - file
@@ -13,9 +13,9 @@ use pdu::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
+use std::path::Path;
 use std::process::exit;
 use std::rc::Rc;
-use std::str;
 
 struct MyListener {
     data: HashMap<reassembler::FlowKey, Vec<u8>>,
@@ -39,7 +39,10 @@ impl reassembler::Listener for MyListener {
 pub struct PcapReassembler {}
 
 impl PcapReassembler {
-    pub fn read_file(file: &str, listener: Rc<RefCell<dyn reassembler::Listener>>) {
+    pub fn read_file<P>(file: P, listener: Rc<RefCell<dyn reassembler::Listener>>)
+    where
+        P: AsRef<Path>,
+    {
         // let file =
         //     File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
         let file = match File::open(file) {

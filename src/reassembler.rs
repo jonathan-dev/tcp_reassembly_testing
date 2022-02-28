@@ -9,6 +9,8 @@ use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::rc::Weak;
 
+use crate::debug_print;
+
 enum TcpState {
     SynRcvd,
     Estab,
@@ -49,7 +51,7 @@ impl TcpStream {
             // TODO: use wrapping add!
             self.next_seq = packet.sequence_number() + 1;
             self.state = TcpState::SynRcvd;
-            println!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
+            debug_print!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
         }
         if matches!(self.state, TcpState::SynRcvd) {
             if let Some(partner) = &self.partner {
@@ -58,15 +60,16 @@ impl TcpStream {
                 if partner_seq == self.ack {
                     // do this in reverse!!!
                     self.state = TcpState::Estab;
-                    println!(
+                    debug_print!(
                         "{} -> {} +++ Connection established +++",
-                        self.key.src.1, self.key.dst.1
+                        self.key.src.1,
+                        self.key.dst.1
                     );
                 }
             }
         }
         if packet.psh() && matches!(self.state, TcpState::Estab) {
-            if packet.sequence_number() == self.next_seq {
+            if packet.sequence_number() <= self.next_seq {
                 //packet in order
                 self.accept_packet(packet);
                 self.check_delayed();
