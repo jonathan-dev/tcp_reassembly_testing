@@ -7,6 +7,5 @@ edition = "2018"
 
 [dependencies]
 pcap-parser = "0.13.0"
-etherparse = "0.8"
 
 pdu = "1.4.2"
