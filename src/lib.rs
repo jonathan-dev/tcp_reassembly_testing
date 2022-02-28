@@ -82,10 +82,10 @@ impl PcapReassembler {
                                             }
                                         }
                                         Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
-                                            unimplemented!();
+                                            // unimplemented!();
                                         }
                                         Ok(other) => {
-                                            panic!("Unexpected protocol {:?}", other);
+                                            // panic!("Unexpected protocol {:?}", other);
                                         }
                                         Err(e) => {
                                             panic!("EthernetPdu::inner() parser failure: {:?}", e);
