@@ -4,17 +4,13 @@ mod debug;
 pub mod reassembler;
 
 // configuration option:
-// - file
 // - connection
 //
-use pcap_parser::traits::PcapReaderIterator;
-use pcap_parser::*;
 use pdu::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::Path;
-use std::process::exit;
+use std::process;
 use std::rc::Rc;
 
 struct MyListener {
@@ -39,72 +35,69 @@ impl reassembler::Listener for MyListener {
 pub struct PcapReassembler {}
 
 impl PcapReassembler {
-    pub fn read_file<P>(file: P, listener: Rc<RefCell<dyn reassembler::Listener>>)
-    where
+    pub fn read_file<P>(
+        file: P,
+        filter: Option<&str>,
+        listener: Rc<RefCell<dyn reassembler::Listener>>,
+    ) where
         P: AsRef<Path>,
     {
         // let file =
         //     File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
-        let file = match File::open(file) {
-            Ok(file) => file,
-            Err(e) => {
-                eprintln!("{}", e);
-                exit(1);
-            }
-        };
         let rc = Rc::clone(&listener);
         let mut reassembler = reassembler::Reassembler::new(&rc);
-        let mut reader = LegacyPcapReader::new(65536, file).expect("LegacyPcapReader");
+        let mut reader = pcap::Capture::from_file(file).expect("capture");
+        if let Some(filter) = filter {
+            match reader.filter(filter, true) {
+                Err(e) => {
+                    println!("{:?}", e);
+                    process::exit(1);
+                }
+                _ => {}
+            }
+        }
+
         let mut packet_num = 1;
         loop {
             match reader.next() {
-                Ok((offset, block)) => {
-                    match block {
-                        PcapBlockOwned::LegacyHeader(_hdr) => {}
-                        PcapBlockOwned::Legacy(_b) => {
-                            match EthernetPdu::new(_b.data) {
-                                Ok(ethernet_pdu) => {
-                                    packet_num += 1;
-                                    // upper-layer protocols can be accessed via the inner() method
-                                    match ethernet_pdu.inner() {
-                                        Ok(Ethernet::Ipv4(ipv4_pdu)) => {
-                                            if let Ok(Ipv4::Tcp(tcp_packet)) = ipv4_pdu.inner() {
-                                                let computed_checksum = tcp_packet
-                                                    .computed_checksum(&Ip::Ipv4(ipv4_pdu));
-                                                if tcp_packet.checksum() == computed_checksum {
-                                                    reassembler.process(ipv4_pdu);
-                                                } else {
-                                                    debug_print!(
-                                                        "encountered wrong checksum in packet {}!",
-                                                        packet_num
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
-                                            // unimplemented!();
-                                        }
-                                        Ok(other) => {
-                                            // panic!("Unexpected protocol {:?}", other);
-                                        }
-                                        Err(e) => {
-                                            panic!("EthernetPdu::inner() parser failure: {:?}", e);
+                Ok(packet) => {
+                    match EthernetPdu::new(&packet) {
+                        Ok(ethernet_pdu) => {
+                            packet_num += 1;
+                            // upper-layer protocols can be accessed via the inner() method
+                            match ethernet_pdu.inner() {
+                                Ok(Ethernet::Ipv4(ipv4_pdu)) => {
+                                    if let Ok(Ipv4::Tcp(tcp_packet)) = ipv4_pdu.inner() {
+                                        let computed_checksum =
+                                            tcp_packet.computed_checksum(&Ip::Ipv4(ipv4_pdu));
+                                        if tcp_packet.checksum() == computed_checksum {
+                                            reassembler.process(ipv4_pdu);
+                                        } else {
+                                            debug_print!(
+                                                "encountered wrong checksum in packet {}!",
+                                                packet_num
+                                            );
                                         }
                                     }
                                 }
+                                Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
+                                    // unimplemented!();
+                                }
+                                Ok(other) => {
+                                    // panic!("Unexpected protocol {:?}", other);
+                                }
                                 Err(e) => {
-                                    panic!("EthernetPdu::new() parser failure: {:?}", e);
+                                    panic!("EthernetPdu::inner() parser failure: {:?}", e);
                                 }
                             }
                         }
-                        PcapBlockOwned::NG(_) => unreachable!(),
+                        Err(e) => {
+                            panic!("EthernetPdu::new() parser failure: {:?}", e);
+                        }
                     }
-                    reader.consume(offset);
                 }
-                Err(PcapError::Eof) => break,
-                Err(PcapError::Incomplete) => {
-                    reader.refill().unwrap();
-                }
+                Err(pcap::Error::NoMorePackets) => break,
+                // TODO: add more error handling
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
@@ -126,7 +119,11 @@ mod tests {
             data: HashMap::new(),
         }));
         let file_name = "/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap";
-        super::PcapReassembler::read_file(file_name, Rc::clone(&l) as Rc<RefCell<dyn Listener>>);
+        super::PcapReassembler::read_file(
+            file_name,
+            None,
+            Rc::clone(&l) as Rc<RefCell<dyn Listener>>,
+        );
         let data = &Rc::clone(&l);
         println!("{:?}", &data.borrow().data);
         if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
