@@ -65,8 +65,16 @@ impl PcapReassembler {
                         Ok(ethernet_pdu) => {
                             packet_num += 1;
                             // upper-layer protocols can be accessed via the inner() method
+
                             match ethernet_pdu.inner() {
                                 Ok(Ethernet::Ipv4(ipv4_pdu)) => {
+                                    if ipv4_pdu.dont_fragment() && ipv4_pdu.more_fragments() {
+                                        println!("illeagal flag combination");
+                                    }
+                                    if ipv4_pdu.more_fragments() {
+                                        // TODO: handle Ip fragmentation
+                                        unimplemented!();
+                                    }
                                     if let Ok(Ipv4::Tcp(tcp_packet)) = ipv4_pdu.inner() {
                                         let computed_checksum =
                                             tcp_packet.computed_checksum(&Ip::Ipv4(ipv4_pdu));
