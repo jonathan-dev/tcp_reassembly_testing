@@ -2,12 +2,17 @@
 use pdu::Tcp;
 use pdu::*;
 use std::cell::RefCell;
-use std::collections::hash_map::Entry;
+use std::cmp;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::iter::Iterator;
+use std::iter::Zip;
 use std::net::Ipv4Addr;
+use std::ops::RangeFrom;
 use std::rc::Rc;
 use std::rc::Weak;
+use std::slice::Iter;
+use std::usize;
 
 use crate::debug_print;
 
@@ -27,6 +32,7 @@ struct TcpStream {
     ack: u32,
     partner: Option<Weak<RefCell<TcpStream>>>,
     listener: Weak<RefCell<dyn Listener>>,
+    reass_buff: Vec<u8>,
 }
 
 impl TcpStream {
@@ -39,9 +45,11 @@ impl TcpStream {
             ack: 0,
             partner: None,
             listener: Rc::downgrade(&listener),
+            reass_buff: vec![],
         }
     }
 
+    /// initial packet add
     fn add(&mut self, packet: pdu::TcpPdu) {
         // set ack
         if packet.ack() {
@@ -69,28 +77,36 @@ impl TcpStream {
             }
         }
         if packet.psh() && matches!(self.state, TcpState::Estab) {
-            if packet.sequence_number() <= self.next_seq {
-                //packet in order
-                self.accept_packet(packet);
-                self.check_delayed();
-            } else {
-                // out of order packet
-                self.delayed
-                    .entry(packet.sequence_number())
-                    .or_default()
-                    .push(packet.into_buffer().to_vec());
-            }
+            // if packet.sequence_number() <= self.next_seq {
+            //     //packet in order
+            //     self.accept_packet(packet);
+            //     self.check_delayed();
+            // } else {
+            // out of order packet
+            self.delayed
+                .entry(packet.sequence_number())
+                .or_default()
+                .push(packet.into_buffer().to_vec());
+            // }
         }
     }
 
+    ///
     fn accept_packet(&mut self, packet: pdu::TcpPdu) {
-        let vec;
+        let mut vec;
         let overlap = self.next_seq - packet.sequence_number();
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
+                // TODO: check overlap for consistnecy
+                let mut iter = data[..cmp::min(overlap as usize, data.len())]
+                    .iter()
+                    .zip(packet.sequence_number()..);
+                self.check_overlap(&mut iter);
                 if overlap > data.len() as u32 {
+                    // packet completly overlaps with already received data
                     vec = Vec::new();
                 } else {
+                    // cut of overlaping part
                     let choosen_data = &data[overlap as usize..];
                     vec = choosen_data.to_vec();
                 }
@@ -100,8 +116,10 @@ impl TcpStream {
             }
 
             // update seq
-            let num_bytes = vec.len();
-            self.next_seq += num_bytes as u32;
+            self.next_seq += vec.len() as u32;
+
+            // TODO: consider not to clone if interface is changed to iterator
+            self.reass_buff.append(&mut vec.clone());
 
             if let Some(l) = self.listener.upgrade() {
                 if !vec.is_empty() {
@@ -119,7 +137,7 @@ impl TcpStream {
                 let mut data_chunks = self.delayed.pop_first().unwrap();
                 // take first data chunk
                 let chunk = data_chunks.1.remove(0);
-                // reinsert if we have multiple entries
+                // reinsert (prev pop) if we have multiple entries
                 if !data_chunks.1.is_empty() {
                     self.delayed.insert(data_chunks.0, data_chunks.1);
                 }
@@ -133,9 +151,21 @@ impl TcpStream {
         }
         self.check_delayed();
     }
+
+    fn check_overlap(&mut self, iter: &mut Zip<Iter<u8>, RangeFrom<u32>>) {
+        for (byte, seq) in iter {
+            let delta = self.next_seq - seq;
+            let len = self.reass_buff.len();
+            let orig = self.reass_buff[len - delta as usize];
+            if byte != &orig {
+                println!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
+            }
+        }
+        // println!("{}", String::from_utf8_lossy(&self.reass_buff));
+    }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
 pub struct FlowKey {
     pub src: (Ipv4Addr, u16),
     pub dst: (Ipv4Addr, u16),
@@ -151,7 +181,8 @@ impl FlowKey {
 }
 
 pub struct Reassembler {
-    streams: HashMap<FlowKey, Rc<RefCell<TcpStream>>>,
+    // TcpStream is Rc RefCell bcause of referencen in partner stream
+    streams: BTreeMap<FlowKey, Rc<RefCell<TcpStream>>>,
     listener: Weak<RefCell<dyn Listener>>,
 }
 
@@ -165,7 +196,7 @@ impl Reassembler {
     pub fn new(listener: &Rc<RefCell<dyn Listener>>) -> Reassembler {
         Reassembler {
             listener: Rc::downgrade(&listener),
-            streams: HashMap::new(),
+            streams: BTreeMap::new(),
         }
     }
 
@@ -188,13 +219,13 @@ impl Reassembler {
             let cur_stream = match self.streams.entry(key.clone()) {
                 Entry::Occupied(stream) => stream.into_mut().to_owned(),
                 Entry::Vacant(v) => {
-                    // try to find partner
                     new_stream = true;
                     v.insert(Rc::new(RefCell::new(TcpStream::new(key.clone(), listener))))
                         .to_owned()
                 }
             };
 
+            // try to find partner
             if new_stream {
                 match self.streams.entry(key.swap_flow_key()) {
                     Entry::Occupied(partner) => {
@@ -210,6 +241,28 @@ impl Reassembler {
 
             Rc::clone(&cur_stream).borrow_mut().add(tcp_packet);
         }
+    }
+    pub fn trigger_reass(&mut self) {
+        for s in self.streams.iter() {
+            Rc::clone(s.1).borrow_mut().check_delayed();
+        }
+    }
+}
+
+impl Iterator for Reassembler {
+    type Item = (FlowKey, Vec<u8>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret_val = match self.streams.pop_first() {
+            Some((key, val)) => {
+                let ss = Rc::clone(&val);
+                let mut s = ss.borrow_mut();
+                s.check_delayed();
+                Some((key, s.reass_buff.clone()))
+            }
+            None => None,
+        };
+        ret_val
     }
 }
 

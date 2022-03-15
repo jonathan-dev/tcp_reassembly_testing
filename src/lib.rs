@@ -23,12 +23,12 @@ impl reassembler::Listener for MyListener {
         for byte in bytes.clone().into_iter() {
             stream_bytes.push(byte);
         }
-        match String::from_utf8(bytes) {
-            Ok(s) => {
-                print!("{}", s);
-            }
-            Err(e) => println!("{}", e),
-        }
+        // match String::from_utf8(bytes) {
+        //     Ok(s) => {
+        //         print!("{}", s);
+        //     }
+        //     Err(e) => println!("{}", e),
+        // }
     }
 }
 
@@ -109,6 +109,11 @@ impl PcapReassembler {
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
+        // TODO: use iterator
+        // reassembler.trigger_reass();
+        for (key, stream) in reassembler {
+            println!("{:?}: {}", key, String::from_utf8_lossy(&stream));
+        }
     }
 }
 
@@ -126,14 +131,15 @@ mod tests {
         let l = Rc::new(RefCell::new(super::MyListener {
             data: HashMap::new(),
         }));
-        let file_name = "/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap";
+        let file_name =
+            "/home/jo/master/tcp_reassembly_test_framework/attacks/sturges-novak-model.pcap";
         super::PcapReassembler::read_file(
             file_name,
             None,
             Rc::clone(&l) as Rc<RefCell<dyn Listener>>,
         );
         let data = &Rc::clone(&l);
-        println!("{:?}", &data.borrow().data);
+        // println!("{:?}", &data.borrow().data);
         if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
             src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
             dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
