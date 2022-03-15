@@ -7,45 +7,20 @@ pub mod reassembler;
 // - connection
 //
 use pdu::*;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use reassembler::Reassembler;
 use std::path::Path;
 use std::process;
-use std::rc::Rc;
-
-struct MyListener {
-    data: HashMap<reassembler::FlowKey, Vec<u8>>,
-}
-
-impl reassembler::Listener for MyListener {
-    fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: reassembler::FlowKey) {
-        let stream_bytes = self.data.entry(stream_key).or_default();
-        for byte in bytes.clone().into_iter() {
-            stream_bytes.push(byte);
-        }
-        // match String::from_utf8(bytes) {
-        //     Ok(s) => {
-        //         print!("{}", s);
-        //     }
-        //     Err(e) => println!("{}", e),
-        // }
-    }
-}
 
 pub struct PcapReassembler {}
 
 impl PcapReassembler {
-    pub fn read_file<P>(
-        file: P,
-        filter: Option<&str>,
-        listener: Rc<RefCell<dyn reassembler::Listener>>,
-    ) where
+    pub fn read_file<P>(file: P, filter: Option<&str>) -> Reassembler
+    where
         P: AsRef<Path>,
     {
         // let file =
         //     File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
-        let rc = Rc::clone(&listener);
-        let mut reassembler = reassembler::Reassembler::new(&rc);
+        let mut reassembler = reassembler::Reassembler::new();
         let mut reader = pcap::Capture::from_file(file).expect("capture");
         if let Some(filter) = filter {
             match reader.filter(filter, true) {
@@ -91,7 +66,7 @@ impl PcapReassembler {
                                 Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
                                     // unimplemented!();
                                 }
-                                Ok(other) => {
+                                Ok(_other) => {
                                     // panic!("Unexpected protocol {:?}", other);
                                 }
                                 Err(e) => {
@@ -109,43 +84,28 @@ impl PcapReassembler {
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
-        // TODO: use iterator
-        // reassembler.trigger_reass();
-        for (key, stream, _inconsistencies) in reassembler {
-            println!("{:?}: {}", key, String::from_utf8_lossy(&stream));
-        }
+        reassembler
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::reassembler::{FlowKey, Listener};
-    use std::cell::RefCell;
-    use std::collections::HashMap;
+    use crate::reassembler::FlowKey;
     use std::net::Ipv4Addr;
-    use std::rc::Rc;
     use std::str;
 
     #[test]
     fn it_works() {
-        let l = Rc::new(RefCell::new(super::MyListener {
-            data: HashMap::new(),
-        }));
         let file_name =
             "/home/jo/master/tcp_reassembly_test_framework/attacks/sturges-novak-model.pcap";
-        super::PcapReassembler::read_file(
-            file_name,
-            None,
-            Rc::clone(&l) as Rc<RefCell<dyn Listener>>,
-        );
-        let data = &Rc::clone(&l);
-        // println!("{:?}", &data.borrow().data);
-        if let Some(stream_data) = &data.borrow().data.get(&FlowKey {
+        let key_of_interest = FlowKey {
             src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
             dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
-        }) {
+        };
+        let mut reass = super::PcapReassembler::read_file(file_name, None);
+        if let Some(stream_data) = reass.find(|(key, _, _)| key == &key_of_interest) {
             assert_eq!(
-                str::from_utf8(&stream_data[..]).unwrap(),
+                str::from_utf8(&stream_data.1).unwrap(),
                 "0AAAJJBCCCLLLMMMFFFGGHHIQ"
             );
             return;

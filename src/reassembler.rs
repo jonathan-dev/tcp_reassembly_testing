@@ -38,13 +38,12 @@ struct TcpStream {
     next_seq: u32,
     ack: u32,
     partner: Option<Weak<RefCell<TcpStream>>>,
-    listener: Weak<RefCell<dyn Listener>>,
     reass_buff: Vec<u8>,
     inconsistencies: Vec<Inconsistency>,
 }
 
 impl TcpStream {
-    fn new(key: FlowKey, listener: &Rc<RefCell<dyn Listener>>) -> TcpStream {
+    fn new(key: FlowKey) -> TcpStream {
         TcpStream {
             state: TcpState::Closed,
             key,
@@ -52,7 +51,6 @@ impl TcpStream {
             next_seq: 0,
             ack: 0,
             partner: None,
-            listener: Rc::downgrade(&listener),
             reass_buff: vec![],
             inconsistencies: vec![],
         }
@@ -86,23 +84,16 @@ impl TcpStream {
             }
         }
         if packet.psh() && matches!(self.state, TcpState::Estab) {
-            // if packet.sequence_number() <= self.next_seq {
-            //     //packet in order
-            //     self.accept_packet(packet);
-            //     self.check_delayed();
-            // } else {
-            // out of order packet
             self.delayed
                 .entry(packet.sequence_number())
                 .or_default()
                 .push(packet.into_buffer().to_vec());
-            // }
         }
     }
 
     /// append packet that has the next seq number to the stream (overlap handling)
     fn accept_packet(&mut self, packet: pdu::TcpPdu) {
-        let vec;
+        let mut vec;
         let overlap = self.next_seq - packet.sequence_number();
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
@@ -126,14 +117,7 @@ impl TcpStream {
             // update seq
             self.next_seq += vec.len() as u32;
 
-            // TODO: consider not to clone if interface is changed to iterator
-            self.reass_buff.append(&mut vec.clone());
-
-            if let Some(l) = self.listener.upgrade() {
-                if !vec.is_empty() {
-                    l.borrow_mut().accept_tcp(vec, self.key.clone())
-                }
-            }
+            self.reass_buff.append(&mut vec);
         }
     }
 
@@ -174,7 +158,6 @@ impl TcpStream {
                 println!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
             }
         }
-        // println!("{}", String::from_utf8_lossy(&self.reass_buff));
     }
 }
 
@@ -194,21 +177,13 @@ impl FlowKey {
 }
 
 pub struct Reassembler {
-    // TcpStream is Rc RefCell bcause of referencen in partner stream
+    /// TcpStream is Rc RefCell bcause of referencen in partner stream
     streams: BTreeMap<FlowKey, Rc<RefCell<TcpStream>>>,
-    listener: Weak<RefCell<dyn Listener>>,
-}
-
-// TODO: remove
-pub trait Listener {
-    fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: FlowKey);
 }
 
 impl Reassembler {
-    pub fn new(listener: &Rc<RefCell<dyn Listener>>) -> Reassembler {
+    pub fn new() -> Reassembler {
         Reassembler {
-            // TODO: remove
-            listener: Rc::downgrade(&listener),
             streams: BTreeMap::new(),
         }
     }
@@ -228,12 +203,11 @@ impl Reassembler {
                 ),
             };
             let mut new_stream = false;
-            let listener = &self.listener.upgrade().unwrap();
             let cur_stream = match self.streams.entry(key.clone()) {
                 Entry::Occupied(stream) => stream.into_mut().to_owned(),
                 Entry::Vacant(v) => {
                     new_stream = true;
-                    v.insert(Rc::new(RefCell::new(TcpStream::new(key.clone(), listener))))
+                    v.insert(Rc::new(RefCell::new(TcpStream::new(key.clone()))))
                         .to_owned()
                 }
             };
@@ -253,12 +227,6 @@ impl Reassembler {
             }
 
             Rc::clone(&cur_stream).borrow_mut().add(tcp_packet);
-        }
-    }
-    // TODO: remove
-    pub fn trigger_reass(&mut self) {
-        for s in self.streams.iter() {
-            Rc::clone(s.1).borrow_mut().check_delayed();
         }
     }
 }
