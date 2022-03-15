@@ -155,7 +155,7 @@ impl TcpStream {
                     new: byte.clone(),
                     orig,
                 });
-                println!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
+                debug_print!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
             }
         }
     }
