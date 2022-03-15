@@ -111,7 +111,7 @@ impl PcapReassembler {
         }
         // TODO: use iterator
         // reassembler.trigger_reass();
-        for (key, stream) in reassembler {
+        for (key, stream, _inconsistencies) in reassembler {
             println!("{:?}: {}", key, String::from_utf8_lossy(&stream));
         }
     }

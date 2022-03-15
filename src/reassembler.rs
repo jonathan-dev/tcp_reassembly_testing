@@ -22,6 +22,13 @@ enum TcpState {
     Closed,
 }
 
+#[derive(Clone)]
+pub struct Inconsistency {
+    seq: u32,
+    new: u8,
+    orig: u8,
+}
+
 /// TcpStream
 /// delayed is able to store multiple data chunks with the same sequence number
 struct TcpStream {
@@ -33,6 +40,7 @@ struct TcpStream {
     partner: Option<Weak<RefCell<TcpStream>>>,
     listener: Weak<RefCell<dyn Listener>>,
     reass_buff: Vec<u8>,
+    inconsistencies: Vec<Inconsistency>,
 }
 
 impl TcpStream {
@@ -46,6 +54,7 @@ impl TcpStream {
             partner: None,
             listener: Rc::downgrade(&listener),
             reass_buff: vec![],
+            inconsistencies: vec![],
         }
     }
 
@@ -91,17 +100,16 @@ impl TcpStream {
         }
     }
 
-    ///
+    /// append packet that has the next seq number to the stream (overlap handling)
     fn accept_packet(&mut self, packet: pdu::TcpPdu) {
-        let mut vec;
+        let vec;
         let overlap = self.next_seq - packet.sequence_number();
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
-                // TODO: check overlap for consistnecy
-                let mut iter = data[..cmp::min(overlap as usize, data.len())]
+                let mut overlap_data = data[..cmp::min(overlap as usize, data.len())]
                     .iter()
                     .zip(packet.sequence_number()..);
-                self.check_overlap(&mut iter);
+                self.check_overlap(&mut overlap_data);
                 if overlap > data.len() as u32 {
                     // packet completly overlaps with already received data
                     vec = Vec::new();
@@ -158,6 +166,11 @@ impl TcpStream {
             let len = self.reass_buff.len();
             let orig = self.reass_buff[len - delta as usize];
             if byte != &orig {
+                self.inconsistencies.push(Inconsistency {
+                    seq,
+                    new: byte.clone(),
+                    orig,
+                });
                 println!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
             }
         }
@@ -186,8 +199,7 @@ pub struct Reassembler {
     listener: Weak<RefCell<dyn Listener>>,
 }
 
-pub struct Event;
-
+// TODO: remove
 pub trait Listener {
     fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: FlowKey);
 }
@@ -195,6 +207,7 @@ pub trait Listener {
 impl Reassembler {
     pub fn new(listener: &Rc<RefCell<dyn Listener>>) -> Reassembler {
         Reassembler {
+            // TODO: remove
             listener: Rc::downgrade(&listener),
             streams: BTreeMap::new(),
         }
@@ -242,6 +255,7 @@ impl Reassembler {
             Rc::clone(&cur_stream).borrow_mut().add(tcp_packet);
         }
     }
+    // TODO: remove
     pub fn trigger_reass(&mut self) {
         for s in self.streams.iter() {
             Rc::clone(s.1).borrow_mut().check_delayed();
@@ -250,15 +264,19 @@ impl Reassembler {
 }
 
 impl Iterator for Reassembler {
-    type Item = (FlowKey, Vec<u8>);
+    type Item = (FlowKey, Vec<u8>, Vec<Inconsistency>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret_val = match self.streams.pop_first() {
             Some((key, val)) => {
-                let ss = Rc::clone(&val);
-                let mut s = ss.borrow_mut();
-                s.check_delayed();
-                Some((key, s.reass_buff.clone()))
+                let stream_cloned = Rc::clone(&val);
+                let mut stream_mut_ref = stream_cloned.borrow_mut();
+                stream_mut_ref.check_delayed();
+                Some((
+                    key,
+                    stream_mut_ref.reass_buff.clone(),
+                    stream_mut_ref.inconsistencies.clone(),
+                ))
             }
             None => None,
         };
