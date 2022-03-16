@@ -1,11 +1,9 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use stream_reassembly::{
     self,
-    reassembler::{FlowKey, Listener},
+    reassembler::{self, FlowKey},
     PcapReassembler,
 };
 
@@ -22,32 +20,20 @@ struct Cli {
     filter: Option<String>,
 }
 
-struct MyListener {
-    data: HashMap<FlowKey, Vec<u8>>,
-}
-
-impl Listener for MyListener {
-    fn accept_tcp(&mut self, bytes: Vec<u8>, stream_key: FlowKey) {
-        let stream_bytes = self.data.entry(stream_key).or_default();
-        for byte in bytes.clone().into_iter() {
-            stream_bytes.push(byte);
-        }
-        print!("{}", String::from_utf8_lossy(&bytes));
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
 
     if let Some(config_path) = cli.file.as_deref() {
         // println!("Value for file: {}", config_path.display());
-        let l = Rc::new(RefCell::new(MyListener {
-            data: HashMap::new(),
-        }));
-        PcapReassembler::read_file(
-            config_path,
-            cli.filter.as_deref(),
-            Rc::clone(&l) as Rc<RefCell<dyn Listener>>,
-        );
+        let key_of_interest = FlowKey {
+            src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
+            dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
+        };
+
+        let mut reassembler = PcapReassembler::read_file(config_path, cli.filter.as_deref());
+
+        if let Some(stream_data) = reassembler.find(|(key, _, _)| key == &key_of_interest) {
+            print!("{}", String::from_utf8_lossy(&stream_data.1))
+        }
     }
 }
