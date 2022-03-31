@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
 use std::path::Path;
 
+use clap::Parser;
 use pcap::Capture;
 use pnet::datalink;
 use pnet::ipnetwork::IpNetwork;
@@ -9,18 +10,38 @@ use pnet::packet::{ethernet, ipv4, tcp, MutablePacket, Packet};
 use pnet::util::MacAddr;
 use rand::{thread_rng, Rng};
 
+static TMP_FILE: &str = "newfile.pcap";
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(short = 'I', long)]
+    interface: String,
+
+    #[clap(short, long)]
+    file: String,
+
+    #[clap(short = 'i', long)]
+    ip_dst: Ipv4Addr,
+
+    #[clap(short, long)]
+    mac_dst: MacAddr,
+
+    #[clap(short, long)]
+    port_src: u16,
+}
+
 fn main() {
+    let args = Args::parse();
     // TODO: option to not fix checksum? to run checksum test (maybe check if it was correct in the
     // first place
     let mut mymac = None;
     let mut myip = None;
-    //    pkts_scheduled = setup_sched();
 
-    //   relative_sched();
+    // get local mac and ip
     for iface in datalink::interfaces()
         .into_iter()
         .filter(|iface| iface.name == "wlp2s0")
-    //.collect()
     {
         mymac = iface.mac;
 
@@ -29,18 +50,17 @@ fn main() {
             _ => panic!("no ipv4 address found"),
         }
     }
-    println!("{:?}, {:?}", mymac, myip);
+
+    println!("local mac: {:?}, local ip {:?}", mymac, myip);
 
     let cap_inactive = Capture::from_device("wlp2s0");
 
     rewrite(
-        Ipv4Addr::new(192, 168, 8, 31),
-        MacAddr::new(0x08, 0x00, 0x27, 0x95, 0xbd, 0x54),
-        // Ipv4Addr::new(192, 168, 8, 29),
+        args.ip_dst,
+        args.mac_dst,
         myip.unwrap().ip(),
-        // MacAddr::new(0x28, 0x16, 0xad, 0x4b, 0xf4, 0x29),
         mymac.unwrap(),
-        "newfile.pcap",
+        args.file,
         5555,
     );
 
@@ -63,6 +83,7 @@ fn main() {
         };
     }
 
+    // Iterate the rest of the packets
     let mut sched_index = 1;
 
     while sched_index < sched_list.len() {
@@ -193,9 +214,6 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
                     Some(ref mut buf) => fix_checksums(buf),
                     None => {}
                 }
-                // TODO: create minimal example of this and figure out how to do this without the
-                // ref and pattern maching!
-                // fix_checksums(sched.packet.unwrap().borrow_mut());
 
                 sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq);
                 sched.exp_rack = sched
@@ -252,7 +270,7 @@ impl Sched {
 
 fn setup_sched() -> Option<Vec<Sched>> {
     // read file altered in rewrite()
-    let mut cap_file = Capture::from_file("newfile.pcap").unwrap();
+    let mut cap_file = Capture::from_file(TMP_FILE).unwrap();
 
     let mut local_ip = None;
 
@@ -325,7 +343,6 @@ fn setup_sched() -> Option<Vec<Sched>> {
             None => panic!("error parsing ethernet frame"),
         }
     }
-    // TODO: fix return
     Some(sched_list)
 }
 
@@ -341,17 +358,14 @@ fn rewrite<P>(
 {
     let mut syn_encountered = false;
     let mut local_ip = None;
-    let mut reader = Capture::from_file(
-        "/home/jo/master/tcp_reassembly_test_framework/attacks/sturges-novak-model.pcap",
-    )
-    .expect("reader");
+    let mut reader = Capture::from_file(file).expect("reader");
     if let Err(e) = reader.filter("tcp", true) {
         eprintln!("{:?}", e);
         panic!("Error applying filter to input file")
     }
 
     let save = Capture::dead(pcap::Linktype::ETHERNET).unwrap();
-    let mut savefile = save.savefile(file);
+    let mut savefile = save.savefile(TMP_FILE);
 
     while let Ok(packet) = reader.next() {
         let mut local = false;
