@@ -281,6 +281,7 @@ fn setup_sched() -> Option<Vec<Sched>> {
     let mut cap_file = Capture::from_file(TMP_FILE).unwrap();
 
     let mut local_ip = None;
+    let mut local_port = None;
 
     let mut sched_list = vec![];
     while let Ok(packet) = cap_file.next() {
@@ -292,17 +293,18 @@ fn setup_sched() -> Option<Vec<Sched>> {
                     let sip = ipv4.get_source();
                     let dip = ipv4.get_destination();
                     match tcp::TcpPacket::new(ipv4.payload()) {
-                        Some(tcp_packet) => {
+                        Some(tcp) => {
                             // TODO: decide who is local and remote
-                            if tcp_packet.get_flags() == TcpFlags::SYN {
+                            if tcp.get_flags() == TcpFlags::SYN {
                                 local_ip = Some(sip);
+                                local_port = Some(tcp.get_source());
                             }
 
-                            if local_ip == Some(sip) {
+                            if local_ip == Some(sip) && local_port == Some(tcp.get_source()) {
                                 local = true;
-                            }
-
-                            if local_ip == Some(dip) {
+                            } else if local_ip == Some(dip)
+                                && local_port == Some(tcp.get_destination())
+                            {
                                 remote = true;
                             }
                             if !local && !remote {
@@ -313,9 +315,9 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 panic!("src and dst addresses are equal replaying against other machines not possible");
                             }
                             // first packet
-                            if tcp_packet.get_flags() == TcpFlags::SYN {
+                            if tcp.get_flags() == TcpFlags::SYN {
                                 let mut sched = Sched::new(SchedType::Local);
-                                sched.curr_lseq = tcp_packet.get_sequence();
+                                sched.curr_lseq = tcp.get_sequence();
                                 sched.packet = Some(eth.packet().into());
                                 sched_list.push(sched);
                             }
@@ -326,8 +328,8 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 // sched.length_curr_ldata = size_payload;
                                 sched.length_last_rdata = sched_list.last()?.length_curr_rdata;
 
-                                sched.curr_lseq = tcp_packet.get_sequence();
-                                sched.curr_lack = tcp_packet.get_acknowledgement();
+                                sched.curr_lseq = tcp.get_sequence();
+                                sched.curr_lack = tcp.get_acknowledgement();
                                 sched.exp_rseq = sched_list.last()?.exp_rseq;
                                 sched.exp_rack = sched_list.last()?.exp_rack;
                                 sched.packet = Some(eth.packet().into());
@@ -342,8 +344,8 @@ fn setup_sched() -> Option<Vec<Sched>> {
 
                                 sched.curr_lseq = sched_list.last()?.curr_lseq;
                                 sched.curr_lack = sched_list.last()?.curr_lack;
-                                sched.exp_rseq = tcp_packet.get_sequence();
-                                sched.exp_rack = tcp_packet.get_acknowledgement();
+                                sched.exp_rseq = tcp.get_sequence();
+                                sched.exp_rack = tcp.get_acknowledgement();
                                 sched.packet = Some(eth.packet().into());
                                 sched_list.push(sched);
                             }
@@ -371,6 +373,7 @@ fn rewrite<P>(
 {
     let mut syn_encountered = false;
     let mut local_ip = None;
+    let mut local_port = None;
     let mut reader = Capture::from_file(file).expect("reader");
     if let Err(e) = reader.filter("tcp", true) {
         eprintln!("{:?}", e);
@@ -396,16 +399,21 @@ fn rewrite<P>(
                                 if tcp.get_flags() == tcp::TcpFlags::SYN {
                                     syn_encountered = true;
                                     local_ip = Some(test_local_ip);
+                                    local_port = Some(tcp.get_source());
                                 }
 
-                                if local_ip == Some(test_local_ip) {
+                                if local_ip == Some(test_local_ip)
+                                    && local_port == Some(tcp.get_source())
+                                {
                                     local = true;
-                                } else if local_ip == Some(test_remote_ip) {
+                                } else if local_ip == Some(test_remote_ip)
+                                    && local_port == Some(tcp.get_destination())
+                                {
                                     remote = true;
                                 }
                                 if local && remote {
                                     // TODO: suppoert by checking the tuple
-                                    panic!("same ip")
+                                    panic!("same ip and port combination for local and remote")
                                 }
 
                                 if local {
