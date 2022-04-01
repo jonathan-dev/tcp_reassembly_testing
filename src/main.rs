@@ -72,6 +72,7 @@ fn main() {
 
     // Start replay by sending the first pakcet
 
+    // immediat_mode is needed (https://github.com/the-tcpdump-group/libpcap/issues/572)
     let mut cap_active = cap_inactive.unwrap().immediate_mode(true).open().unwrap();
     if sched_list[0].remote_or_local == SchedType::Local {
         match sched_list.first().unwrap().packet {
@@ -390,7 +391,6 @@ fn rewrite<P>(
                     Some(mut ipv4) => {
                         let test_local_ip = ipv4.get_source();
                         let test_remote_ip = ipv4.get_destination();
-
                         match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
                             Some(mut tcp) => {
                                 if tcp.get_flags() == tcp::TcpFlags::SYN {
@@ -400,8 +400,7 @@ fn rewrite<P>(
 
                                 if local_ip == Some(test_local_ip) {
                                     local = true;
-                                }
-                                if local_ip == Some(test_remote_ip) {
+                                } else if local_ip == Some(test_remote_ip) {
                                     remote = true;
                                 }
                                 if local && remote {
