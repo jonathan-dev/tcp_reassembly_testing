@@ -83,34 +83,19 @@ fn main() {
         };
     }
 
-    // Iterate the rest of the packets
     let mut sched_index = 1;
 
+    // === Packet Iteration Loop ===
     while sched_index < sched_list.len() {
         println!("idx: {}", sched_index);
+
         match sched_list[sched_index].remote_or_local {
             SchedType::Local => {
-                // adjust ack before sending
+                // === Send Packet ===
                 let curr_lack = sched_list[sched_index].curr_lack;
-                dbg!(curr_lack);
-                match sched_list[sched_index].packet {
-                    Some(ref mut buf) => match ethernet::MutableEthernetPacket::new(buf) {
-                        Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
-                            Some(mut ipv4) => {
-                                match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
-                                    Some(mut tcp) => tcp.set_acknowledgement(curr_lack),
-                                    None => {}
-                                }
-                            }
-                            None => {}
-                        },
-                        None => {}
-                    },
-                    None => {}
-                };
-                // send packet
                 match sched_list[sched_index].packet {
                     Some(ref mut buf) => {
+                        adjust_ack(buf, curr_lack);
                         fix_checksums(buf);
                         match cap_active.sendpacket(buf.as_ref()) {
                             Ok(()) => {}
@@ -119,17 +104,19 @@ fn main() {
                     }
                     None => unimplemented!(),
                 };
+                sched_index += 1;
             }
 
             SchedType::Remote => {
                 println!("waiting for packet");
+                // === Receive Packet ===
                 match cap_active.next() {
                     Ok(packet) => {
-                        println!("{:?}", packet);
                         match ethernet::EthernetPacket::new(&packet) {
                             Some(eth) => match ipv4::Ipv4Packet::new(eth.payload()) {
                                 Some(ipv4) => match tcp::TcpPacket::new(ipv4.payload()) {
                                     Some(tcp) => {
+                                        // SYN ACK
                                         if tcp.get_flags() == TcpFlags::SYN | TcpFlags::ACK {
                                             println!(
                                                 "Received Remote Packet...............   {}",
@@ -140,26 +127,45 @@ fn main() {
                                             let initial_rseq = tcp.get_sequence();
                                             println!("Remote Sequence number: {}", initial_rseq);
                                             // make schedule absolute based on received seq
-                                            // TODO: where is this written to the packet?
                                             sched_list[1].exp_rseq =
                                                 sched_list[1].exp_rseq.wrapping_add(initial_rseq);
                                             for mut sched in sched_list.iter_mut().skip(2) {
-                                                if sched.remote_or_local == SchedType::Local {
-                                                    dbg!(sched.curr_lack);
-                                                    sched.curr_lack =
-                                                        sched.curr_lack.wrapping_add(initial_rseq);
-                                                    dbg!(sched.curr_lack);
-                                                } else if sched.remote_or_local == SchedType::Remote
-                                                {
-                                                    sched.curr_lack =
-                                                        sched.exp_rseq.wrapping_add(initial_rseq);
+                                                match sched.remote_or_local {
+                                                    SchedType::Local => {
+                                                        sched.curr_lack = sched
+                                                            .curr_lack
+                                                            .wrapping_add(initial_rseq);
+                                                    }
+                                                    SchedType::Remote => {
+                                                        sched.exp_rseq = sched
+                                                            .exp_rseq
+                                                            .wrapping_add(initial_rseq);
+                                                    }
                                                 }
                                             }
+                                            sched_index += 1;
+                                            continue;
+                                        }
+                                        println!(">Received a Remote Packet");
+                                        println!(">>Checking Expectations");
+
+                                        // Handle Remote Packet Loss
+
+                                        // No Packet Loss... Proceed Normally
+                                        dbg!(tcp.get_acknowledgement());
+                                        dbg!(sched_list[sched_index].exp_rack);
+                                        dbg!(tcp.get_sequence());
+                                        dbg!(sched_list[sched_index].exp_rseq);
+                                        if tcp.get_sequence() == sched_list[sched_index].exp_rseq
+                                            && tcp.get_acknowledgement()
+                                                == sched_list[sched_index].exp_rack
+                                        {
+                                            println!("Received Remote Packet (as expected)");
+                                            sched_index += 1;
                                         }
                                     }
                                     None => {}
                                 },
-
                                 None => {}
                             },
                             None => {}
@@ -171,7 +177,6 @@ fn main() {
                 }
             }
         }
-        sched_index += 1;
     }
 }
 
@@ -183,7 +188,7 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
 
     // make local packages absolute (initial seq is known)
     // make remote packages relative (we first have to wait on the initial seq)
-    for sched in sched_list {
+    for mut sched in sched_list {
         match sched.remote_or_local {
             SchedType::Local => {
                 sched.curr_lseq = sched
@@ -222,10 +227,12 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
                     .wrapping_add(lseq_adjust);
             }
             SchedType::Remote => {
+                dbg!(sched.exp_rseq);
                 sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq); // Fix to be relative
+                dbg!(sched.exp_rseq);
                 sched.exp_rack = sched
                     .exp_rack
-                    .wrapping_sub(first_rseq) // Fix to be relative
+                    .wrapping_sub(first_lseq) // Fix to be relative
                     .wrapping_add(lseq_adjust); // Fix to be absolute
             }
         }
@@ -304,12 +311,15 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 // TODO: possible to take ports into accout to determine remote/ local
                                 panic!("src and dst addresses are equal replaying against other machines not possible");
                             }
+                            // first packet
                             if tcp_packet.get_flags() == TcpFlags::SYN {
                                 let mut sched = Sched::new(SchedType::Local);
                                 sched.curr_lseq = tcp_packet.get_sequence();
                                 sched.packet = Some(eth.packet().into());
                                 sched_list.push(sched);
-                            } else if local {
+                            }
+                            // LOCAL
+                            else if local {
                                 let mut sched = Sched::new(SchedType::Local);
                                 sched.length_last_ldata = sched_list.last()?.length_last_rdata;
                                 // sched.length_curr_ldata = size_payload;
@@ -321,7 +331,9 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 sched.exp_rack = sched_list.last()?.exp_rack;
                                 sched.packet = Some(eth.packet().into());
                                 sched_list.push(sched);
-                            } else if remote {
+                            }
+                            // REMOTE
+                            else if remote {
                                 let mut sched = Sched::new(SchedType::Remote);
                                 sched.length_last_ldata = sched_list.last()?.length_last_ldata;
                                 sched.length_last_rdata = sched_list.last()?.length_last_rdata;
@@ -446,6 +458,23 @@ fn rewrite<P>(
     }
 }
 
+/// Takes a mutable packet buffer slice and trys to parses it as eth/ipv4/tcp and set the ACK to the
+/// given value
+fn adjust_ack(buf: &mut [u8], ack: u32) {
+    match ethernet::MutableEthernetPacket::new(buf) {
+        Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
+            Some(mut ipv4) => match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
+                Some(mut tcp) => tcp.set_acknowledgement(ack),
+                None => {}
+            },
+            None => {}
+        },
+        None => {}
+    };
+}
+
+/// Takes a mutable packet buffer slice and parses it as eth/ipv4/tcp and recalculates the
+/// checksums
 fn fix_checksums(buf: &mut [u8]) {
     match ethernet::MutableEthernetPacket::new(buf) {
         Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
