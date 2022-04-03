@@ -29,12 +29,16 @@ struct Args {
 
     #[clap(short, long)]
     port_src: u16,
+
+    #[clap(short, long)]
+    verbose: bool,
 }
 
 fn main() {
     let args = Args::parse();
     // TODO: option to not fix checksum? to run checksum test (maybe check if it was correct in the
     // first place
+    // TODO: option to use none random sequence numbers For wrapping tests
     let mut mymac = None;
     let mut myip = None;
 
@@ -50,8 +54,9 @@ fn main() {
             _ => panic!("no ipv4 address found"),
         }
     }
-
-    println!("local mac: {:?}, local ip {:?}", mymac, myip);
+    if args.verbose {
+        println!("local mac: {:?}, local ip {:?}", mymac, myip);
+    }
 
     let cap_inactive = Capture::from_device("wlp2s0");
 
@@ -68,7 +73,9 @@ fn main() {
 
     let exp_rseq = sched_list[1].exp_rseq;
     relative_sched(&mut sched_list, exp_rseq);
-    println!("Packets Scheduled");
+    if args.verbose {
+        println!("Packets Scheduled");
+    }
 
     // Start replay by sending the first pakcet
 
@@ -88,7 +95,9 @@ fn main() {
 
     // === Packet Iteration Loop ===
     while sched_index < sched_list.len() {
-        println!("idx: {}", sched_index);
+        if args.verbose {
+            println!("idx: {}", sched_index);
+        }
 
         match sched_list[sched_index].remote_or_local {
             SchedType::Local => {
@@ -109,7 +118,9 @@ fn main() {
             }
 
             SchedType::Remote => {
-                println!("waiting for packet");
+                if args.verbose {
+                    println!("waiting for packet");
+                }
                 // === Receive Packet ===
                 match cap_active.next() {
                     Ok(packet) => {
@@ -119,14 +130,19 @@ fn main() {
                                     Some(tcp) => {
                                         // SYN ACK
                                         if tcp.get_flags() == TcpFlags::SYN | TcpFlags::ACK {
-                                            println!(
-                                                "Received Remote Packet...............   {}",
-                                                sched_index + 1
-                                            );
-                                            println!("Remote Packet Expectation met.");
-                                            println!("Proceeding in replay....");
                                             let initial_rseq = tcp.get_sequence();
-                                            println!("Remote Sequence number: {}", initial_rseq);
+                                            if args.verbose {
+                                                println!(
+                                                    "Received Remote Packet...............   {}",
+                                                    sched_index + 1
+                                                );
+                                                println!("Remote Packet Expectation met.");
+                                                println!("Proceeding in replay....");
+                                                println!(
+                                                    "Remote Sequence number: {}",
+                                                    initial_rseq
+                                                );
+                                            }
                                             // make schedule absolute based on received seq
                                             sched_list[1].exp_rseq =
                                                 sched_list[1].exp_rseq.wrapping_add(initial_rseq);
@@ -147,21 +163,29 @@ fn main() {
                                             sched_index += 1;
                                             continue;
                                         }
-                                        println!(">Received a Remote Packet");
-                                        println!(">>Checking Expectations");
+                                        if args.verbose {
+                                            println!(">Received a Remote Packet");
+                                            println!(">>Checking Expectations");
+                                        }
 
                                         // Handle Remote Packet Loss
 
                                         // No Packet Loss... Proceed Normally
-                                        dbg!(tcp.get_acknowledgement());
-                                        dbg!(sched_list[sched_index].exp_rack);
-                                        dbg!(tcp.get_sequence());
-                                        dbg!(sched_list[sched_index].exp_rseq);
                                         if tcp.get_sequence() == sched_list[sched_index].exp_rseq
                                             && tcp.get_acknowledgement()
                                                 == sched_list[sched_index].exp_rack
                                         {
-                                            println!("Received Remote Packet (as expected)");
+                                            if args.verbose {
+                                                println!("Received Remote Packet (as expected)");
+                                            }
+                                            if (sched_list[sched_index].exp_flags & TcpFlags::FIN)
+                                                > 0
+                                            {
+                                                println!(
+                                                    "{}",
+                                                    String::from_utf8_lossy(tcp.payload())
+                                                );
+                                            }
                                             sched_index += 1;
                                         }
                                     }
@@ -228,9 +252,7 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
                     .wrapping_add(lseq_adjust);
             }
             SchedType::Remote => {
-                dbg!(sched.exp_rseq);
                 sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq); // Fix to be relative
-                dbg!(sched.exp_rseq);
                 sched.exp_rack = sched
                     .exp_rack
                     .wrapping_sub(first_lseq) // Fix to be relative
@@ -251,6 +273,7 @@ struct Sched {
     curr_lack: u32,
     exp_rseq: u32,
     exp_rack: u32,
+    exp_flags: u16,
     remote_or_local: SchedType,
     length_last_ldata: u32,
     length_curr_ldata: u32,
@@ -266,6 +289,7 @@ impl Sched {
             curr_lack: 0,
             exp_rseq: 0,
             exp_rack: 0,
+            exp_flags: 0,
             remote_or_local: t,
             length_last_ldata: 0,
             length_curr_ldata: 0,
@@ -347,6 +371,8 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 sched.exp_rseq = tcp.get_sequence();
                                 sched.exp_rack = tcp.get_acknowledgement();
                                 sched.packet = Some(eth.packet().into());
+
+                                sched.exp_flags = tcp.get_flags();
                                 sched_list.push(sched);
                             }
                         }
