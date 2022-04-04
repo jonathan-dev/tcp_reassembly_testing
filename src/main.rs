@@ -36,52 +36,34 @@ struct Args {
     verbose: bool,
 }
 
+// TODO: option to not fix checksum? to run checksum test (maybe check if it was correct in the
+// first place
+// TODO: option to use none random sequence numbers For wrapping tests
+
 fn main() {
+    // arg parsing
     let args = Args::parse();
-    // TODO: option to not fix checksum? to run checksum test (maybe check if it was correct in the
-    // first place
-    // TODO: option to use none random sequence numbers For wrapping tests
-    let mut mymac = None;
-    let mut myip = None;
     if args.verbose {
         println!("verbose");
         env::set_var("RUST_LOG", "info");
     }
     env_logger::init();
 
-    // get local mac and ip
-    for iface in datalink::interfaces()
-        .into_iter()
-        .filter(|iface| iface.name == "wlp2s0")
-    {
-        mymac = iface.mac;
-
-        match iface.ips.into_iter().find(|ip| ip.is_ipv4()) {
-            Some(IpNetwork::V4(ip)) => myip = Some(ip),
-            _ => panic!("no ipv4 address found"),
-        }
-    }
+    // get local ip and mac
+    let (myip, mymac) = get_ip_and_mac(&args.interface);
     info!("local mac: {:?}, local ip {:?}", mymac, myip);
 
-    let cap_inactive = Capture::from_device("wlp2s0");
-
-    rewrite(
-        args.ip_dst,
-        args.mac_dst,
-        myip.unwrap().ip(),
-        mymac.unwrap(),
-        args.file,
-        5555,
-    );
+    rewrite(args.ip_dst, args.mac_dst, myip, mymac, args.file, 5555);
 
     let mut sched_list = setup_sched().expect("failed to setup schedule");
 
-    let exp_rseq = sched_list[1].exp_rseq;
+    let exp_rseq = sched_list[1].exp_rseq; // get expected remote sequence number (as basis for relative counting)
     relative_sched(&mut sched_list, exp_rseq);
     info!("Packets Scheduled");
 
     // Start replay by sending the first pakcet
 
+    let cap_inactive = Capture::from_device(args.interface.as_str());
     // immediat_mode is needed (https://github.com/the-tcpdump-group/libpcap/issues/572)
     let mut cap_active = cap_inactive.unwrap().immediate_mode(true).open().unwrap();
     if sched_list[0].remote_or_local == SchedType::Local {
@@ -195,6 +177,9 @@ fn main() {
     }
 }
 
+/// Adjust schedule to be based on new initial seqence numbers. The local side will be based on a
+/// randomly generated value and the remote side will be made based on 0 for the moment (realtive)
+/// until the initial sequence number of the remote will be received.
 fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
     info!("relative_sched");
     let lseq_adjust: u32 = thread_rng().gen();
@@ -212,26 +197,12 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
                     .wrapping_add(lseq_adjust); // Fix to be absolute
                 sched.curr_lack = sched.curr_lack.wrapping_sub(first_rseq);
 
-                // modify seq in packet buffer
+                // adjust packet buffer
                 match sched.packet {
-                    Some(ref mut buf) => match ethernet::MutableEthernetPacket::new(buf) {
-                        Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
-                            Some(mut ipv4) => {
-                                match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
-                                    Some(mut tcp) => {
-                                        tcp.set_sequence(sched.curr_lseq);
-                                    }
-                                    None => {}
-                                }
-                            }
-                            None => {}
-                        },
-                        None => {}
-                    },
-                    None => {}
-                }
-                match sched.packet {
-                    Some(ref mut buf) => fix_checksums(buf),
+                    Some(ref mut buf) => {
+                        adjust_seq(buf, sched.curr_lseq);
+                        fix_checksums(buf);
+                    }
                     None => {}
                 }
 
@@ -265,10 +236,6 @@ struct Sched {
     exp_rack: u32,
     exp_flags: u16,
     remote_or_local: SchedType,
-    length_last_ldata: u32,
-    length_curr_ldata: u32,
-    length_last_rdata: u32,
-    length_curr_rdata: u32,
     packet: Option<Box<[u8]>>,
 }
 
@@ -281,10 +248,6 @@ impl Sched {
             exp_rack: 0,
             exp_flags: 0,
             remote_or_local: t,
-            length_last_ldata: 0,
-            length_curr_ldata: 0,
-            length_last_rdata: 0,
-            length_curr_rdata: 0,
             packet: None,
         }
     }
@@ -294,21 +257,24 @@ fn setup_sched() -> Option<Vec<Sched>> {
     // read file altered in rewrite()
     let mut cap_file = Capture::from_file(TMP_FILE).unwrap();
 
+    // local port and ip (to be determined on the first SYN packet)
     let mut local_ip = None;
     let mut local_port = None;
 
     let mut sched_list = vec![];
     while let Ok(packet) = cap_file.next() {
+        // indication if packet is send by local or remote
         let mut local = false;
         let mut remote = false;
         match ethernet::EthernetPacket::new(&packet) {
             Some(eth) => match ipv4::Ipv4Packet::new(eth.payload()) {
                 Some(ipv4) => {
+                    // get src and dst pi for later
                     let sip = ipv4.get_source();
                     let dip = ipv4.get_destination();
                     match tcp::TcpPacket::new(ipv4.payload()) {
                         Some(tcp) => {
-                            // TODO: decide who is local and remote
+                            // decide who is local and remote
                             if tcp.get_flags() == TcpFlags::SYN {
                                 local_ip = Some(sip);
                                 local_port = Some(tcp.get_source());
@@ -325,10 +291,9 @@ fn setup_sched() -> Option<Vec<Sched>> {
                                 panic!("fist packet was not a syn packet make sure that the pcap file includes only one flow starting with the 3-way handshake");
                             }
                             if local && remote {
-                                // TODO: possible to take ports into accout to determine remote/ local
                                 panic!("src and dst addresses are equal replaying against other machines not possible");
                             }
-                            // first packet
+                            // FIRST PACKET (SYN)
                             if tcp.get_flags() == TcpFlags::SYN {
                                 let mut sched = Sched::new(SchedType::Local);
                                 sched.curr_lseq = tcp.get_sequence();
@@ -338,9 +303,6 @@ fn setup_sched() -> Option<Vec<Sched>> {
                             // LOCAL
                             else if local {
                                 let mut sched = Sched::new(SchedType::Local);
-                                sched.length_last_ldata = sched_list.last()?.length_last_rdata;
-                                // sched.length_curr_ldata = size_payload;
-                                sched.length_last_rdata = sched_list.last()?.length_curr_rdata;
 
                                 sched.curr_lseq = tcp.get_sequence();
                                 sched.curr_lack = tcp.get_acknowledgement();
@@ -352,9 +314,6 @@ fn setup_sched() -> Option<Vec<Sched>> {
                             // REMOTE
                             else if remote {
                                 let mut sched = Sched::new(SchedType::Remote);
-                                sched.length_last_ldata = sched_list.last()?.length_last_ldata;
-                                sched.length_last_rdata = sched_list.last()?.length_last_rdata;
-                                // sched.length_curr_rdata = size_payload;
 
                                 sched.curr_lseq = sched_list.last()?.curr_lseq;
                                 sched.curr_lack = sched_list.last()?.curr_lack;
@@ -412,6 +371,7 @@ fn rewrite<P>(
                         let test_remote_ip = ipv4.get_destination();
                         match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
                             Some(mut tcp) => {
+                                // Determine local/remote
                                 if tcp.get_flags() == tcp::TcpFlags::SYN {
                                     syn_encountered = true;
                                     local_ip = Some(test_local_ip);
@@ -428,18 +388,19 @@ fn rewrite<P>(
                                     remote = true;
                                 }
                                 if local && remote {
-                                    // TODO: suppoert by checking the tuple
                                     panic!("same ip and port combination for local and remote")
                                 }
 
-                                if local {
-                                    tcp.set_source(new_src_port);
-                                }
-                                if remote {
-                                    tcp.set_destination(new_src_port);
-                                }
-
                                 if syn_encountered {
+                                    // Set Port
+                                    if local {
+                                        tcp.set_source(new_src_port);
+                                    }
+                                    if remote {
+                                        tcp.set_destination(new_src_port);
+                                    }
+
+                                    // Fix checksum TCP
                                     tcp.set_checksum(tcp::ipv4_checksum(
                                         &tcp.to_immutable(),
                                         &myip,
@@ -449,6 +410,7 @@ fn rewrite<P>(
                             }
                             None => unimplemented!(),
                         }
+                        // Set IP
                         if local {
                             ipv4.set_destination(new_remoteip);
                             ipv4.set_source(myip);
@@ -457,10 +419,12 @@ fn rewrite<P>(
                             ipv4.set_destination(myip);
                             ipv4.set_source(new_remoteip);
                         }
+                        // Fix Checksum IP
                         ipv4.set_checksum(ipv4::checksum(&ipv4.to_immutable()));
                     }
                     None => unimplemented!(),
                 }
+                // Set MAC
                 if local {
                     eth.set_source(mymac);
                     eth.set_destination(new_remotemac);
@@ -469,6 +433,7 @@ fn rewrite<P>(
                     eth.set_source(new_remotemac);
                     eth.set_destination(mymac);
                 }
+                // Save Packet
                 if syn_encountered {
                     match savefile {
                         Ok(ref mut s) => s.write(&pcap::Packet::new(packet.header, eth.packet())),
@@ -479,6 +444,21 @@ fn rewrite<P>(
             None => unimplemented!(),
         }
     }
+}
+
+/// Takes a mutable packet buffer slice and trys to parses it as eth/ipv4/tcp and set the SEQ to the
+/// given value
+fn adjust_seq(buf: &mut [u8], seq: u32) {
+    match ethernet::MutableEthernetPacket::new(buf) {
+        Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
+            Some(mut ipv4) => match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
+                Some(mut tcp) => tcp.set_sequence(seq),
+                None => {}
+            },
+            None => {}
+        },
+        None => {}
+    };
 }
 
 /// Takes a mutable packet buffer slice and trys to parses it as eth/ipv4/tcp and set the ACK to the
@@ -516,4 +496,23 @@ fn fix_checksums(buf: &mut [u8]) {
         },
         None => {}
     };
+}
+fn get_ip_and_mac(interface: &str) -> (Ipv4Addr, MacAddr) {
+    let mut mymac = None;
+    let mut myip = None;
+    for iface in datalink::interfaces()
+        .into_iter()
+        .filter(|iface| iface.name == interface)
+    {
+        mymac = iface.mac;
+
+        match iface.ips.into_iter().find(|ip| ip.is_ipv4()) {
+            Some(IpNetwork::V4(ip)) => myip = Some(ip),
+            _ => panic!("no ipv4 address found"),
+        }
+    }
+    match (myip, mymac) {
+        (Some(ip), Some(mac)) => (ip.ip(), mac),
+        _ => panic!("problem getting local ip and mac"),
+    }
 }
