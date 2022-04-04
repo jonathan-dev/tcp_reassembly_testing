@@ -61,11 +61,11 @@ fn main() {
     relative_sched(&mut sched_list, exp_rseq);
     info!("Packets Scheduled");
 
-    // Start replay by sending the first pakcet
-
     let cap_inactive = Capture::from_device(args.interface.as_str());
     // immediat_mode is needed (https://github.com/the-tcpdump-group/libpcap/issues/572)
     let mut cap_active = cap_inactive.unwrap().immediate_mode(true).open().unwrap();
+
+    // === Sending First Packet ===
     if sched_list[0].remote_or_local == SchedType::Local {
         match sched_list.first().unwrap().packet {
             Some(ref buf) => match cap_active.sendpacket(buf.as_ref()) {
@@ -175,165 +175,6 @@ fn main() {
             }
         }
     }
-}
-
-/// Adjust schedule to be based on new initial seqence numbers. The local side will be based on a
-/// randomly generated value and the remote side will be made based on 0 for the moment (realtive)
-/// until the initial sequence number of the remote will be received.
-fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
-    info!("relative_sched");
-    let lseq_adjust: u32 = thread_rng().gen();
-    info!("Random Local SEQ: {}", lseq_adjust);
-    let first_lseq = sched_list.first().unwrap().curr_lseq;
-
-    // make local packages absolute (initial seq is known)
-    // make remote packages relative (we first have to wait on the initial seq)
-    for mut sched in sched_list {
-        match sched.remote_or_local {
-            SchedType::Local => {
-                sched.curr_lseq = sched
-                    .curr_lseq
-                    .wrapping_sub(first_lseq) // Fix to be relative
-                    .wrapping_add(lseq_adjust); // Fix to be absolute
-                sched.curr_lack = sched.curr_lack.wrapping_sub(first_rseq);
-
-                // adjust packet buffer
-                match sched.packet {
-                    Some(ref mut buf) => {
-                        adjust_seq(buf, sched.curr_lseq);
-                        fix_checksums(buf);
-                    }
-                    None => {}
-                }
-
-                sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq);
-                sched.exp_rack = sched
-                    .exp_rack
-                    .wrapping_sub(first_rseq)
-                    .wrapping_add(lseq_adjust);
-            }
-            SchedType::Remote => {
-                sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq); // Fix to be relative
-                sched.exp_rack = sched
-                    .exp_rack
-                    .wrapping_sub(first_lseq) // Fix to be relative
-                    .wrapping_add(lseq_adjust); // Fix to be absolute
-            }
-        }
-    }
-}
-
-#[derive(PartialEq)]
-enum SchedType {
-    Remote,
-    Local,
-}
-
-struct Sched {
-    curr_lseq: u32,
-    curr_lack: u32,
-    exp_rseq: u32,
-    exp_rack: u32,
-    exp_flags: u16,
-    remote_or_local: SchedType,
-    packet: Option<Box<[u8]>>,
-}
-
-impl Sched {
-    fn new(t: SchedType) -> Sched {
-        Sched {
-            curr_lseq: 0,
-            curr_lack: 0,
-            exp_rseq: 0,
-            exp_rack: 0,
-            exp_flags: 0,
-            remote_or_local: t,
-            packet: None,
-        }
-    }
-}
-
-fn setup_sched() -> Option<Vec<Sched>> {
-    // read file altered in rewrite()
-    let mut cap_file = Capture::from_file(TMP_FILE).unwrap();
-
-    // local port and ip (to be determined on the first SYN packet)
-    let mut local_ip = None;
-    let mut local_port = None;
-
-    let mut sched_list = vec![];
-    while let Ok(packet) = cap_file.next() {
-        // indication if packet is send by local or remote
-        let mut local = false;
-        let mut remote = false;
-        match ethernet::EthernetPacket::new(&packet) {
-            Some(eth) => match ipv4::Ipv4Packet::new(eth.payload()) {
-                Some(ipv4) => {
-                    // get src and dst pi for later
-                    let sip = ipv4.get_source();
-                    let dip = ipv4.get_destination();
-                    match tcp::TcpPacket::new(ipv4.payload()) {
-                        Some(tcp) => {
-                            // decide who is local and remote
-                            if tcp.get_flags() == TcpFlags::SYN {
-                                local_ip = Some(sip);
-                                local_port = Some(tcp.get_source());
-                            }
-
-                            if local_ip == Some(sip) && local_port == Some(tcp.get_source()) {
-                                local = true;
-                            } else if local_ip == Some(dip)
-                                && local_port == Some(tcp.get_destination())
-                            {
-                                remote = true;
-                            }
-                            if !local && !remote {
-                                panic!("fist packet was not a syn packet make sure that the pcap file includes only one flow starting with the 3-way handshake");
-                            }
-                            if local && remote {
-                                panic!("src and dst addresses are equal replaying against other machines not possible");
-                            }
-                            // FIRST PACKET (SYN)
-                            if tcp.get_flags() == TcpFlags::SYN {
-                                let mut sched = Sched::new(SchedType::Local);
-                                sched.curr_lseq = tcp.get_sequence();
-                                sched.packet = Some(eth.packet().into());
-                                sched_list.push(sched);
-                            }
-                            // LOCAL
-                            else if local {
-                                let mut sched = Sched::new(SchedType::Local);
-
-                                sched.curr_lseq = tcp.get_sequence();
-                                sched.curr_lack = tcp.get_acknowledgement();
-                                sched.exp_rseq = sched_list.last()?.exp_rseq;
-                                sched.exp_rack = sched_list.last()?.exp_rack;
-                                sched.packet = Some(eth.packet().into());
-                                sched_list.push(sched);
-                            }
-                            // REMOTE
-                            else if remote {
-                                let mut sched = Sched::new(SchedType::Remote);
-
-                                sched.curr_lseq = sched_list.last()?.curr_lseq;
-                                sched.curr_lack = sched_list.last()?.curr_lack;
-                                sched.exp_rseq = tcp.get_sequence();
-                                sched.exp_rack = tcp.get_acknowledgement();
-                                sched.packet = Some(eth.packet().into());
-
-                                sched.exp_flags = tcp.get_flags();
-                                sched_list.push(sched);
-                            }
-                        }
-                        None => panic!("error parsing tcp packet"),
-                    }
-                }
-                None => panic!("only ipv4 is supported"),
-            },
-            None => panic!("error parsing ethernet frame"),
-        }
-    }
-    Some(sched_list)
 }
 
 fn rewrite<P>(
@@ -446,6 +287,166 @@ fn rewrite<P>(
     }
 }
 
+#[derive(PartialEq)]
+enum SchedType {
+    Remote,
+    Local,
+}
+
+struct Sched {
+    curr_lseq: u32,
+    curr_lack: u32,
+    exp_rseq: u32,
+    exp_rack: u32,
+    exp_flags: u16,
+    remote_or_local: SchedType,
+    packet: Option<Box<[u8]>>,
+}
+
+impl Sched {
+    fn new(t: SchedType) -> Sched {
+        Sched {
+            curr_lseq: 0,
+            curr_lack: 0,
+            exp_rseq: 0,
+            exp_rack: 0,
+            exp_flags: 0,
+            remote_or_local: t,
+            packet: None,
+        }
+    }
+}
+
+/// Create a list of Packets Scheduled to send
+fn setup_sched() -> Option<Vec<Sched>> {
+    // read file altered in rewrite()
+    let mut cap_file = Capture::from_file(TMP_FILE).unwrap();
+
+    // local port and ip (to be determined on the first SYN packet)
+    let mut local_ip = None;
+    let mut local_port = None;
+
+    let mut sched_list = vec![];
+    while let Ok(packet) = cap_file.next() {
+        // indication if packet is send by local or remote
+        let mut local = false;
+        let mut remote = false;
+        match ethernet::EthernetPacket::new(&packet) {
+            Some(eth) => match ipv4::Ipv4Packet::new(eth.payload()) {
+                Some(ipv4) => {
+                    // get src and dst pi for later
+                    let sip = ipv4.get_source();
+                    let dip = ipv4.get_destination();
+                    match tcp::TcpPacket::new(ipv4.payload()) {
+                        Some(tcp) => {
+                            // decide who is local and remote
+                            if tcp.get_flags() == TcpFlags::SYN {
+                                local_ip = Some(sip);
+                                local_port = Some(tcp.get_source());
+                            }
+
+                            if local_ip == Some(sip) && local_port == Some(tcp.get_source()) {
+                                local = true;
+                            } else if local_ip == Some(dip)
+                                && local_port == Some(tcp.get_destination())
+                            {
+                                remote = true;
+                            }
+                            if !local && !remote {
+                                panic!("fist packet was not a syn packet make sure that the pcap file includes only one flow starting with the 3-way handshake");
+                            }
+                            if local && remote {
+                                panic!("src and dst addresses are equal replaying against other machines not possible");
+                            }
+                            // FIRST PACKET (SYN)
+                            if tcp.get_flags() == TcpFlags::SYN {
+                                let mut sched = Sched::new(SchedType::Local);
+                                sched.curr_lseq = tcp.get_sequence();
+                                sched.packet = Some(eth.packet().into());
+                                sched_list.push(sched);
+                            }
+                            // LOCAL
+                            else if local {
+                                let mut sched = Sched::new(SchedType::Local);
+
+                                sched.curr_lseq = tcp.get_sequence();
+                                sched.curr_lack = tcp.get_acknowledgement();
+                                sched.exp_rseq = sched_list.last()?.exp_rseq;
+                                sched.exp_rack = sched_list.last()?.exp_rack;
+                                sched.packet = Some(eth.packet().into());
+                                sched_list.push(sched);
+                            }
+                            // REMOTE
+                            else if remote {
+                                let mut sched = Sched::new(SchedType::Remote);
+
+                                sched.curr_lseq = sched_list.last()?.curr_lseq;
+                                sched.curr_lack = sched_list.last()?.curr_lack;
+                                sched.exp_rseq = tcp.get_sequence();
+                                sched.exp_rack = tcp.get_acknowledgement();
+                                sched.packet = Some(eth.packet().into());
+
+                                sched.exp_flags = tcp.get_flags();
+                                sched_list.push(sched);
+                            }
+                        }
+                        None => panic!("error parsing tcp packet"),
+                    }
+                }
+                None => panic!("only ipv4 is supported"),
+            },
+            None => panic!("error parsing ethernet frame"),
+        }
+    }
+    Some(sched_list)
+}
+
+/// Adjust schedule to be based on new initial seqence numbers. The local side will be based on a
+/// randomly generated value and the remote side will be made based on 0 for the moment (realtive)
+/// until the initial sequence number of the remote will be received.
+fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
+    info!("relative_sched");
+    let lseq_adjust: u32 = thread_rng().gen();
+    info!("Random Local SEQ: {}", lseq_adjust);
+    let first_lseq = sched_list.first().unwrap().curr_lseq;
+
+    // make local packages absolute (initial seq is known)
+    // make remote packages relative (we first have to wait on the initial seq)
+    for mut sched in sched_list {
+        match sched.remote_or_local {
+            SchedType::Local => {
+                sched.curr_lseq = sched
+                    .curr_lseq
+                    .wrapping_sub(first_lseq) // Fix to be relative
+                    .wrapping_add(lseq_adjust); // Fix to be absolute
+                sched.curr_lack = sched.curr_lack.wrapping_sub(first_rseq);
+
+                // adjust packet buffer
+                match sched.packet {
+                    Some(ref mut buf) => {
+                        adjust_seq(buf, sched.curr_lseq);
+                        fix_checksums(buf);
+                    }
+                    None => {}
+                }
+
+                sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq);
+                sched.exp_rack = sched
+                    .exp_rack
+                    .wrapping_sub(first_rseq)
+                    .wrapping_add(lseq_adjust);
+            }
+            SchedType::Remote => {
+                sched.exp_rseq = sched.exp_rseq.wrapping_sub(first_rseq); // Fix to be relative
+                sched.exp_rack = sched
+                    .exp_rack
+                    .wrapping_sub(first_lseq) // Fix to be relative
+                    .wrapping_add(lseq_adjust); // Fix to be absolute
+            }
+        }
+    }
+}
+
 /// Takes a mutable packet buffer slice and trys to parses it as eth/ipv4/tcp and set the SEQ to the
 /// given value
 fn adjust_seq(buf: &mut [u8], seq: u32) {
@@ -497,6 +498,8 @@ fn fix_checksums(buf: &mut [u8]) {
         None => {}
     };
 }
+
+/// Returns tuple (Ipv4, Mac) that was determined using pnet::datalink::interfaces()
 fn get_ip_and_mac(interface: &str) -> (Ipv4Addr, MacAddr) {
     let mut mymac = None;
     let mut myip = None;
