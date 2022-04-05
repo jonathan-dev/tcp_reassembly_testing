@@ -125,77 +125,113 @@ def segment(dip):
     pack1 = ip / tcp / seg1
     packets.append(pack1)
 
+    ack_tcp = TCP(dport=sp, sport=dp, flags="A", seq=ISN_receiver+1, ack=tcpseq) # TODO: note + 1
+    ack = ip_reverse / ack_tcp
+    packets.append(ack)
+
     tcp.seq = tcpseq + p2_seqplus
     pack2 = ip / tcp / seg2
     packets.append(pack2)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p3_seqplus
     pack3 = ip / tcp / seg3
     packets.append(pack3)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p3_1_seqplus
     pack3_1 = ip / tcp / seg3_1
     packets.append(pack3_1)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p3_2_seqplus
     pack3_2 = ip / tcp / seg3_2
     packets.append(pack3_2)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p3_3_seqplus
     pack3_3 = ip / tcp / seg3_3
     packets.append(pack3_3)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p3_4_seqplus
     pack3_4 = ip / tcp / seg3_4
     packets.append(pack3_4)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p3_5_seqplus
     pack3_5 = ip / tcp / seg3_5
     packets.append(pack3_5)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p3_6_seqplus
     pack3_6 = ip / tcp / seg3_6
     packets.append(pack3_6)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p4_seqplus
     pack4 = ip / tcp / seg4
     packets.append(pack4)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p5_seqplus
     pack5 = ip / tcp / seg5
     packets.append(pack5)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p6_seqplus
     pack6 = ip / tcp / seg6
     packets.append(pack6)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p7_seqplus
     pack7 = ip / tcp / seg7
     packets.append(pack7)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p8_seqplus
     pack8 = ip / tcp / seg8
     packets.append(pack8)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p9_seqplus
     pack9 = ip / tcp / seg9
     packets.append(pack9)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq + p10_seqplus
     pack10 = ip / tcp / seg10
     packets.append(pack10)
+
+    packets.append(ack)
 
     tcp.seq = tcpseq + p11_seqplus
     pack11 = ip / tcp / seg11
     packets.append(pack11)
 
+    packets.append(ack)
+
     tcp.seq = tcpseq
     pack0 = ip / tcp / seg0
     packets.append(pack0)
 
-    # craft FIN
+    # craft FIN ACK
     tcpseq = tcpseq + p12_seqplus
-    fin = ip / TCP(sport=sp, dport=dp, flags="F", seq=tcpseq)
+    fin = ip / TCP(sport=sp, dport=dp, flags="FA", seq=tcpseq, ack=myack)
     packets.append(fin)
 
     # craft FIN ACK
@@ -212,7 +248,7 @@ def segment(dip):
 import random, time, sys
 from scapy.all import IP, TCP, Ether, send, wrpcap
 
-dip = "127.0.0.1"
-sip = "127.0.0.1"
+dip = "192.168.8.29"
+sip = "192.168.8.31"
 
 segment(dip)
