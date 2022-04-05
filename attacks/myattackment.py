@@ -45,30 +45,41 @@ def segment(dip):
 
     # begin of data packets
 
-    #a
+    # attack
     tcp = TCP(ack=myack, dport=dp, sport=sp, flags="PA", window=5480)
     tcp.seq = tcpseq + attack_begin
     pack1 = ip / tcp / attack_data
     packets.append(pack1)
 
-    #a
+    ack_tcp = TCP(dport=sp, sport=dp, flags="A", seq=ISN_receiver + 1, ack=tcpseq)  # TODO: note + 1
+    ack = ip_reverse / ack_tcp
+    packets.append(ack)
+
+    # hment
     tcp = TCP(ack=myack, dport=dp, sport=sp, flags="PA", window=5480)
     tcp.seq = tcpseq + hment_begin
     pack1 = ip / tcp / hment_data
     packets.append(pack1)
 
-    #a
+    packets.append(ack)
+
+    # my
     tcp = TCP(ack=myack, dport=dp, sport=sp, flags="PA", window=5480)
     tcp.seq = tcpseq + my_begin
     pack1 = ip / tcp / my_data
     packets.append(pack1)
 
-    # craft FIN
+    last_to_ack = tcpseq+hment_begin+hment_length
+    ack_tcp.ack = last_to_ack
+    ack = ip_reverse / ack_tcp
+    packets.append(ack)
+
+    # craft FIN ACK ->
     tcpseq = tcpseq + hment_length + hment_begin
-    fin = ip / TCP(sport=sp, dport=dp, flags="F", seq=tcpseq)
+    fin = ip / TCP(sport=sp, dport=dp, flags="FA", seq=tcpseq, ack=last_to_ack)
     packets.append(fin)
 
-    # craft FIN ACK
+    # craft FIN ACK <-
     finack = ip_reverse / TCP(sport=dp, dport=sp, flags="FA", ack=tcpseq + 1, seq=ISN_receiver + 1)
     packets.append(finack)
 
