@@ -82,14 +82,19 @@ fn main() {
     while sched_index < sched_list.len() {
         info!("idx: {}", sched_index);
 
-        match sched_list[sched_index].remote_or_local {
+        let cur_sched = &mut sched_list[sched_index];
+        match cur_sched.remote_or_local {
             SchedType::Local => {
                 // === Send Packet ===
-                let curr_lack = sched_list[sched_index].curr_lack;
-                match sched_list[sched_index].packet {
+                let curr_lack = cur_sched.curr_lack;
+                match cur_sched.packet {
                     Some(ref mut buf) => {
                         adjust_ack(buf, curr_lack);
-                        fix_checksums(buf);
+                        fix_checksums(
+                            buf,
+                            cur_sched.ip_checksum_correct,
+                            cur_sched.tcp_checksum_correct,
+                        );
                         match cap_active.sendpacket(buf.as_ref()) {
                             Ok(()) => {}
                             Err(e) => eprintln!("error sending packet {}", e),
@@ -145,20 +150,21 @@ fn main() {
                                         // Handle Remote Packet Loss
 
                                         // No Packet Loss... Proceed Normally
-                                        if tcp.get_sequence() == sched_list[sched_index].exp_rseq
-                                            && tcp.get_acknowledgement()
-                                                == sched_list[sched_index].exp_rack
+                                        if tcp.get_sequence() == cur_sched.exp_rseq
+                                            && tcp.get_acknowledgement() == cur_sched.exp_rack
                                         {
                                             info!("Received Remote Packet (as expected)");
-                                            if (sched_list[sched_index].exp_flags & TcpFlags::FIN)
-                                                > 0
-                                            {
+                                            if (cur_sched.exp_flags & TcpFlags::FIN) > 0 {
                                                 println!(
                                                     "{}",
                                                     String::from_utf8_lossy(tcp.payload())
                                                 );
                                             }
                                             sched_index += 1;
+                                        } else {
+                                            dbg!(cur_sched.exp_rseq);
+                                            dbg!(cur_sched.exp_rack);
+                                            println!("{:?},{:?}", tcp, ipv4);
                                         }
                                     }
                                     None => {}
@@ -200,6 +206,8 @@ fn rewrite<P>(
     let mut savefile = save.savefile(TMP_FILE);
 
     while let Ok(packet) = reader.next() {
+        let mut ip_checksum_correct = false;
+        let mut tcp_checksum_correct = false;
         let mut local = false;
         let mut remote = false;
         let mut test = Vec::new();
@@ -208,22 +216,23 @@ fn rewrite<P>(
             Some(mut eth) => {
                 match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
                     Some(mut ipv4) => {
-                        let test_local_ip = ipv4.get_source();
-                        let test_remote_ip = ipv4.get_destination();
+                        let sip = ipv4.get_source();
+                        let dip = ipv4.get_destination();
+                        if ipv4.get_checksum() == ipv4::checksum(&ipv4.to_immutable()) {
+                            ip_checksum_correct = true;
+                        }
                         match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
                             Some(mut tcp) => {
                                 // Determine local/remote
                                 if tcp.get_flags() == tcp::TcpFlags::SYN {
                                     syn_encountered = true;
-                                    local_ip = Some(test_local_ip);
+                                    local_ip = Some(sip);
                                     local_port = Some(tcp.get_source());
                                 }
 
-                                if local_ip == Some(test_local_ip)
-                                    && local_port == Some(tcp.get_source())
-                                {
+                                if local_ip == Some(sip) && local_port == Some(tcp.get_source()) {
                                     local = true;
-                                } else if local_ip == Some(test_remote_ip)
+                                } else if local_ip == Some(dip)
                                     && local_port == Some(tcp.get_destination())
                                 {
                                     remote = true;
@@ -233,6 +242,11 @@ fn rewrite<P>(
                                 }
 
                                 if syn_encountered {
+                                    if tcp.get_checksum()
+                                        == tcp::ipv4_checksum(&tcp.to_immutable(), &sip, &dip)
+                                    {
+                                        tcp_checksum_correct = true;
+                                    };
                                     // Set Port
                                     if local {
                                         tcp.set_source(new_src_port);
@@ -242,11 +256,13 @@ fn rewrite<P>(
                                     }
 
                                     // Fix checksum TCP
-                                    tcp.set_checksum(tcp::ipv4_checksum(
-                                        &tcp.to_immutable(),
-                                        &myip,
-                                        &new_remoteip,
-                                    ));
+                                    if tcp_checksum_correct {
+                                        tcp.set_checksum(tcp::ipv4_checksum(
+                                            &tcp.to_immutable(),
+                                            &myip,
+                                            &new_remoteip,
+                                        ));
+                                    }
                                 }
                             }
                             None => unimplemented!(),
@@ -261,7 +277,9 @@ fn rewrite<P>(
                             ipv4.set_source(new_remoteip);
                         }
                         // Fix Checksum IP
-                        ipv4.set_checksum(ipv4::checksum(&ipv4.to_immutable()));
+                        if ip_checksum_correct {
+                            ipv4.set_checksum(ipv4::checksum(&ipv4.to_immutable()));
+                        };
                     }
                     None => unimplemented!(),
                 }
@@ -301,18 +319,22 @@ struct Sched {
     exp_flags: u16,
     remote_or_local: SchedType,
     packet: Option<Box<[u8]>>,
+    ip_checksum_correct: bool,
+    tcp_checksum_correct: bool,
 }
 
 impl Sched {
-    fn new(t: SchedType) -> Sched {
+    fn new(ip_checksum_correct: bool, tcp_checksum_correct: bool) -> Sched {
         Sched {
             curr_lseq: 0,
             curr_lack: 0,
             exp_rseq: 0,
             exp_rack: 0,
             exp_flags: 0,
-            remote_or_local: t,
+            remote_or_local: SchedType::Local,
             packet: None,
+            ip_checksum_correct,
+            tcp_checksum_correct,
         }
     }
 }
@@ -329,6 +351,8 @@ fn setup_sched() -> Option<Vec<Sched>> {
     let mut sched_list = vec![];
     while let Ok(packet) = cap_file.next() {
         // indication if packet is send by local or remote
+        let mut ip_checksum_correct = false;
+        let mut tcp_checksum_correct = false;
         let mut local = false;
         let mut remote = false;
         match ethernet::EthernetPacket::new(&packet) {
@@ -337,6 +361,9 @@ fn setup_sched() -> Option<Vec<Sched>> {
                     // get src and dst pi for later
                     let sip = ipv4.get_source();
                     let dip = ipv4.get_destination();
+                    if ipv4.get_checksum() == ipv4::checksum(&ipv4.to_immutable()) {
+                        ip_checksum_correct = true;
+                    }
                     match tcp::TcpPacket::new(ipv4.payload()) {
                         Some(tcp) => {
                             // decide who is local and remote
@@ -358,16 +385,23 @@ fn setup_sched() -> Option<Vec<Sched>> {
                             if local && remote {
                                 panic!("src and dst addresses are equal replaying against other machines not possible");
                             }
+
+                            if tcp.get_checksum()
+                                == tcp::ipv4_checksum(&tcp.to_immutable(), &sip, &dip)
+                            {
+                                tcp_checksum_correct = true;
+                            };
+                            let mut sched = Sched::new(ip_checksum_correct, tcp_checksum_correct);
                             // FIRST PACKET (SYN)
                             if tcp.get_flags() == TcpFlags::SYN {
-                                let mut sched = Sched::new(SchedType::Local);
+                                sched.remote_or_local = SchedType::Local;
                                 sched.curr_lseq = tcp.get_sequence();
                                 sched.packet = Some(eth.packet().into());
                                 sched_list.push(sched);
                             }
                             // LOCAL
                             else if local {
-                                let mut sched = Sched::new(SchedType::Local);
+                                sched.remote_or_local = SchedType::Local;
 
                                 sched.curr_lseq = tcp.get_sequence();
                                 sched.curr_lack = tcp.get_acknowledgement();
@@ -378,7 +412,7 @@ fn setup_sched() -> Option<Vec<Sched>> {
                             }
                             // REMOTE
                             else if remote {
-                                let mut sched = Sched::new(SchedType::Remote);
+                                sched.remote_or_local = SchedType::Remote;
 
                                 sched.curr_lseq = sched_list.last()?.curr_lseq;
                                 sched.curr_lack = sched_list.last()?.curr_lack;
@@ -425,7 +459,7 @@ fn relative_sched(sched_list: &mut Vec<Sched>, first_rseq: u32) {
                 match sched.packet {
                     Some(ref mut buf) => {
                         adjust_seq(buf, sched.curr_lseq);
-                        fix_checksums(buf);
+                        fix_checksums(buf, sched.ip_checksum_correct, sched.tcp_checksum_correct);
                     }
                     None => {}
                 }
@@ -479,7 +513,7 @@ fn adjust_ack(buf: &mut [u8], ack: u32) {
 
 /// Takes a mutable packet buffer slice and parses it as eth/ipv4/tcp and recalculates the
 /// checksums
-fn fix_checksums(buf: &mut [u8]) {
+fn fix_checksums(buf: &mut [u8], fix_ip: bool, fix_tcp: bool) {
     match ethernet::MutableEthernetPacket::new(buf) {
         Some(mut eth) => match ipv4::MutableIpv4Packet::new(eth.payload_mut()) {
             Some(mut ipv4) => {
@@ -487,11 +521,15 @@ fn fix_checksums(buf: &mut [u8]) {
                 let dip = ipv4.get_destination();
                 match tcp::MutableTcpPacket::new(ipv4.payload_mut()) {
                     Some(mut tcp) => {
-                        tcp.set_checksum(tcp::ipv4_checksum(&tcp.to_immutable(), &sip, &dip));
+                        if fix_tcp {
+                            tcp.set_checksum(tcp::ipv4_checksum(&tcp.to_immutable(), &sip, &dip));
+                        }
                     }
                     None => {}
                 }
-                ipv4.set_checksum(ipv4::checksum(&ipv4.to_immutable()));
+                if fix_ip {
+                    ipv4.set_checksum(ipv4::checksum(&ipv4.to_immutable()));
+                }
             }
             None => {}
         },
