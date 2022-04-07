@@ -1,5 +1,5 @@
-# AAAAA...BBB.
-# .CCCCCCCCCCC
+# AAAAA...BBB
+# .CCCCCCCCC.
 
 from scapy.all import IP, TCP, Ether, send, wrpcap
 
@@ -17,7 +17,7 @@ x_beg = 6
 
 a_len = 5
 b_len = 3
-c_len = 11
+c_len = 9
 x_len = 2
 
 a_data = "A" * a_len
@@ -75,7 +75,7 @@ packets.append(pack3)
 
 # ack c
 
-tcpseq = tcpseq + c_beg + c_len
+tcpseq = tcpseq + b_beg + b_len
 ack_tcp = TCP(ack=tcpseq, seq=myack, dport=sp, sport=dp, flags="A")
 ack = ip_reverse/ack_tcp
 packets.append(ack)
@@ -92,4 +92,4 @@ packets.append(finack)
 lastack = ip / TCP(sport=sp, dport=dp, flags="A", seq=tcpseq, ack=ISN_receiver + 2)
 packets.append(lastack)
 
-wrpcap("F.pcap", packets)
+wrpcap("E.pcap", packets)

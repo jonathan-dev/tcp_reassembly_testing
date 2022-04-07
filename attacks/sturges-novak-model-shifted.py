@@ -235,7 +235,7 @@ def segment(i):
     pack0 = ip / tcp / seg0
     packets.append(pack0)
 
-    # craft FIN
+    # craft FIN ACK
     tcpseq = wrapping_add(tcpseq, p12_seqplus)
     fin = ip / TCP(sport=sp, dport=dp, flags="FA", seq=tcpseq, ack=myack)
     packets.append(fin)

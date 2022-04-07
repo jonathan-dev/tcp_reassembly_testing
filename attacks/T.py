@@ -1,5 +1,7 @@
-# AAAAA...BBB.
-# .CCCCCCCCCCC
+# AAAAA...BBB......
+# ..............CCC
+# .....XXX......... (plug hole) to see reassembling result
+# ...........YYY...
 
 from scapy.all import IP, TCP, Ether, send, wrpcap
 
@@ -12,18 +14,21 @@ ISN_receiver = 1000
 
 a_beg = 0
 b_beg = 8
-c_beg = 1
-x_beg = 6
+c_beg = 14
+x_beg = 5
+y_beg = 11
 
 a_len = 5
 b_len = 3
-c_len = 11
-x_len = 2
+c_len = 3
+x_len = 3
+y_len = 3
 
 a_data = "A" * a_len
 b_data = "B" * b_len
 c_data = "C" * c_len
 x_data = "X" * x_len
+y_data = "Y" * y_len
 
 packets = []
 
@@ -59,24 +64,41 @@ ack = ip_reverse/ack_tcp
 packets.append(ack)
 
 # b
-tcp = TCP(ack=myack, dport=dp, sport=sp, flags="PA")
+
 tcp.seq = tcpseq + b_beg
 pack2 = ip / tcp / b_data
 packets.append(pack2)
 
 # ack b
-packets.append(ack) # send same ack as for a because of hole
+packets.append(ack) # hole still present
 
 # c
-tcp = TCP(ack=myack, dport=dp, sport=sp, flags="PA")
 tcp.seq = tcpseq + c_beg
 pack3 = ip / tcp / c_data
 packets.append(pack3)
 
 # ack c
+packets.append(ack) # hole still present
 
-tcpseq = tcpseq + c_beg + c_len
-ack_tcp = TCP(ack=tcpseq, seq=myack, dport=sp, sport=dp, flags="A")
+# x
+tcp.seq = tcpseq + x_beg
+pack4 = ip / tcp / x_data
+packets.append(pack4)
+
+# ack x
+
+ack_tcp.ack = tcpseq+b_beg+b_len
+ack = ip_reverse/ack_tcp
+packets.append(ack)
+
+# y
+tcp.seq = tcpseq + y_beg
+pack5 = ip / tcp / y_data
+packets.append(pack5)
+
+# ack y
+tcpseq = tcpseq+c_beg+c_len
+ack_tcp.ack = tcpseq
 ack = ip_reverse/ack_tcp
 packets.append(ack)
 
@@ -92,4 +114,4 @@ packets.append(finack)
 lastack = ip / TCP(sport=sp, dport=dp, flags="A", seq=tcpseq, ack=ISN_receiver + 2)
 packets.append(lastack)
 
-wrpcap("F.pcap", packets)
+wrpcap("T.pcap", packets)
