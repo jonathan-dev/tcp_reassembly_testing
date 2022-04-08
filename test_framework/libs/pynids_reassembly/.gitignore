@@ -1,0 +1,4 @@
+build
+dist
+venv 
+pynids_reassembly.spec
