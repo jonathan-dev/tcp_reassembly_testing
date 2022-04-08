@@ -64,7 +64,7 @@ impl TcpStream {
         }
         if packet.syn() && matches!(self.state, TcpState::Closed) {
             // TODO: use wrapping add!
-            self.next_seq = packet.sequence_number() + 1;
+            self.next_seq = packet.sequence_number().wrapping_add(1);
             self.state = TcpState::SynRcvd;
             debug_print!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
         }
@@ -100,7 +100,7 @@ impl TcpStream {
                 let mut overlap_data = data[..cmp::min(overlap as usize, data.len())]
                     .iter()
                     .zip(packet.sequence_number()..);
-                self.check_overlap(&mut overlap_data);
+                // self.check_overlap(&mut overlap_data);
                 if overlap > data.len() as u32 {
                     // packet completly overlaps with already received data
                     vec = Vec::new();
@@ -115,7 +115,7 @@ impl TcpStream {
             }
 
             // update seq
-            self.next_seq += vec.len() as u32;
+            self.next_seq = self.next_seq.wrapping_add(vec.len() as u32);
 
             self.reass_buff.append(&mut vec);
         }
@@ -125,6 +125,7 @@ impl TcpStream {
         if let Some(entry) = self.delayed.first_entry() {
             // check the first entry
             if entry.key() <= &self.next_seq {
+                // TODO: condition is problematic concerning wrapping if seq hasn't wrapped yet we
                 // take the fist entry (list of chunks) (multimap)
                 let mut data_chunks = self.delayed.pop_first().unwrap();
                 // take first data chunk
