@@ -1,11 +1,22 @@
+mod macaddr;
+
 use clap::{Parser, Subcommand};
 use glob::glob;
-use std::{path::PathBuf, process, process::Command};
+use macaddr::MacAddr;
+use std::{
+    net::Ipv4Addr,
+    os::unix::prelude::ExitStatusExt,
+    path::PathBuf,
+    process::Command,
+    process::{self, ExitStatus},
+};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 #[clap(propagate_version = true)]
 struct Cli {
+    #[clap(short, long)]
+    no_error: bool,
     #[clap(subcommand)]
     command: Commands,
 }
@@ -16,6 +27,12 @@ enum Commands {
     Install,
     Clean,
     Run,
+    TestOs {
+        #[clap(short, long)]
+        ip: Ipv4Addr,
+        #[clap(short, long)]
+        mac: MacAddr,
+    },
 }
 
 fn main() {
@@ -95,6 +112,7 @@ fn main() {
                         {
                             match bin_entry {
                                 Ok(bin) => {
+                                    let bin_name = bin.clone();
                                     let mut real_bin = bin;
                                     if real_bin.is_dir() {
                                         let folder_name = real_bin.clone();
@@ -104,11 +122,26 @@ fn main() {
                                         .args(["-f", attack_path.display().to_string().as_str()])
                                         .output()
                                         .expect("failed to execute process");
-                                    println!("{:?}", output);
+                                    if !cli.no_error || output.status == ExitStatus::from_raw(0) {
+                                        println!("{:?}, {:?}", output, bin_name);
+                                    }
                                 }
                                 Err(e) => println!("{:?}", e),
                             }
                         }
+                    }
+                    Err(e) => println!("{:?}", e),
+                }
+            }
+        }
+        Commands::TestOs { ip, mac } => {
+            println!("{}, {:?}", ip, mac);
+            // find pcap files
+            for entry in glob("./attacks/*.pcap").expect("Failes to read glob pattern") {
+                match entry {
+                    Ok(attack_path) => {
+                        println!("==={}===", attack_path.display());
+                        // TODO: function call
                     }
                     Err(e) => println!("{:?}", e),
                 }

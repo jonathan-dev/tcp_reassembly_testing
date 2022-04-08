@@ -1,3 +1,5 @@
+#define NO_REASS_VERSIONCHECK
+
 #include "reass/packet.h"
 #include "reass/packet_listener.h"
 #include "reass/pcap_reader.h"
