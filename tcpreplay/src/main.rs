@@ -8,24 +8,31 @@ use std::env;
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
+    /// name of the interface that is doing the replay
     #[clap(short = 'I', long)]
     interface: String,
 
+    /// pcap file to replay
     #[clap(short, long)]
     file: String,
 
+    /// ipv4 address of the target system
     #[clap(short = 'i', long)]
     ip_dst: Ipv4Addr,
 
+    /// mac address of the target system
     #[clap(short, long)]
     mac_dst: MacAddr,
 
+    /// local port to be used
     #[clap(short, long)]
     port_src: u16,
 
+    /// print additional logging information
     #[clap(short, long)]
     verbose: bool,
 
+    /// use random sequence nummbers
     #[clap(short, long)]
     rand: bool,
 }
