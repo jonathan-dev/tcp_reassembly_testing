@@ -23,17 +23,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Adds files to myapp
+    /// Generate all files (attacks, libs)
     Install,
+    /// Remove generated files (attacks, libs)
     Clean,
+    /// Run the generated tests in the attacks folder on the compliled libraries in the libs folder
     Run,
+    /// Run the the generated tests in the attacks folder on an live target
     TestOs {
+        /// ipv4 address of the target system
         #[clap(short, long)]
         ip: Ipv4Addr,
+        /// Mac address of the target system
         #[clap(short, long)]
         mac: MacAddr,
+        /// name of the interface to use to connenct to the target system
         #[clap(short = 'I', long)]
         interface: String,
+        /// local port to use
         #[clap(short, long)]
         port: u16,
     },
@@ -152,8 +159,6 @@ fn main() {
                 match entry {
                     Ok(attack_path) => {
                         println!("==={}===", attack_path.display());
-                        // TODO: function call
-                        // replay(interface, attack_path, false, *ip, *mac);
                         let res = replay(interface, attack_path.clone(), false, *ip, *mac, *port);
 
                         match res {
