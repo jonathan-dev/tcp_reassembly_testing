@@ -1,8 +1,5 @@
-mod macaddr;
-
 use clap::{Parser, Subcommand};
 use glob::glob;
-use macaddr::MacAddr;
 use std::{
     net::Ipv4Addr,
     os::unix::prelude::ExitStatusExt,
@@ -10,6 +7,9 @@ use std::{
     process::Command,
     process::{self, ExitStatus},
 };
+use tcpreplay::replay;
+use tcpreplay::replay_init;
+use tcpreplay::MacAddr;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -32,6 +32,10 @@ enum Commands {
         ip: Ipv4Addr,
         #[clap(short, long)]
         mac: MacAddr,
+        #[clap(short = 'I', long)]
+        interface: String,
+        #[clap(short, long)]
+        port: u16,
     },
 }
 
@@ -134,14 +138,29 @@ fn main() {
                 }
             }
         }
-        Commands::TestOs { ip, mac } => {
+        Commands::TestOs {
+            ip,
+            mac,
+            interface,
+            port,
+        } => {
             println!("{}, {:?}", ip, mac);
+            // std::env::set_var("RUST_LOG", "info");
+            replay_init();
             // find pcap files
             for entry in glob("./attacks/*.pcap").expect("Failes to read glob pattern") {
                 match entry {
                     Ok(attack_path) => {
                         println!("==={}===", attack_path.display());
                         // TODO: function call
+                        // replay(interface, attack_path, false, *ip, *mac);
+                        let res = replay(interface, attack_path.clone(), false, *ip, *mac, *port);
+
+                        match res {
+                            Some(res) => println!("{}", String::from_utf8_lossy(&res)),
+
+                            None => eprintln!("Error running test {:?} no result", attack_path),
+                        }
                     }
                     Err(e) => println!("{:?}", e),
                 }

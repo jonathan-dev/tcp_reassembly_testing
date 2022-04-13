@@ -87,7 +87,7 @@ finack = ip_reverse / TCP(sport=dp, dport=sp, flags="FA", ack=tcpseq + 1, seq=IS
 packets.append(finack)
 
 # craft last ACK
-lastack = ip / TCP(sport=sp, dport=dp, flags="A", seq=tcpseq, ack=ISN_receiver + 2)
+lastack = ip / TCP(sport=sp, dport=dp, flags="A", seq=tcpseq + 1, ack=ISN_receiver + 2)
 packets.append(lastack)
 
 wrpcap("L.pcap", packets)

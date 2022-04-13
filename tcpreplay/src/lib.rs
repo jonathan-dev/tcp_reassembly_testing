@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 use std::path::Path;
+use std::{thread, time};
 
 use log::info;
 use pcap::Capture;
@@ -7,19 +8,31 @@ use pnet::datalink;
 use pnet::ipnetwork::IpNetwork;
 use pnet::packet::tcp::TcpFlags;
 use pnet::packet::{ethernet, ipv4, tcp, MutablePacket, Packet};
-use pnet::util::MacAddr;
+pub use pnet::util::MacAddr;
 use rand::{thread_rng, Rng};
 
 static TMP_FILE: &str = "newfile.pcap";
 
-pub fn replay(interface: &str, file: &str, rand: bool, ip_dst: Ipv4Addr, mac_dst: MacAddr) {
+pub fn replay_init() {
     env_logger::init();
+}
 
+pub fn replay<P>(
+    interface: &str,
+    file: P,
+    rand: bool,
+    ip_dst: Ipv4Addr,
+    mac_dst: MacAddr,
+    port_src: u16,
+) -> Option<Vec<u8>>
+where
+    P: AsRef<Path>,
+{
     // get local ip and mac
     let (myip, mymac) = get_ip_and_mac(interface);
     info!("local mac: {:?}, local ip {:?}", mymac, myip);
 
-    rewrite(ip_dst, mac_dst, myip, mymac, file, 5555);
+    rewrite(ip_dst, mac_dst, myip, mymac, file, port_src);
 
     let mut sched_list = setup_sched().expect("failed to setup schedule");
 
@@ -43,10 +56,13 @@ pub fn replay(interface: &str, file: &str, rand: bool, ip_dst: Ipv4Addr, mac_dst
     }
 
     let mut sched_index = 1;
+    let mut syn_ack_encountered = false;
+    let mut missing_syn_ack_counter = 0;
+    let mut result = None;
 
     // === Packet Iteration Loop ===
     while sched_index < sched_list.len() {
-        info!("idx: {}", sched_index);
+        // info!("idx: {}", sched_index);
 
         let cur_sched = &mut sched_list[sched_index];
         match cur_sched.remote_or_local {
@@ -72,7 +88,7 @@ pub fn replay(interface: &str, file: &str, rand: bool, ip_dst: Ipv4Addr, mac_dst
             }
 
             SchedType::Remote => {
-                info!("waiting for packet");
+                // info!("waiting for packet");
                 // === Receive Packet ===
                 match cap_active.next() {
                     Ok(packet) => {
@@ -80,57 +96,77 @@ pub fn replay(interface: &str, file: &str, rand: bool, ip_dst: Ipv4Addr, mac_dst
                             Some(eth) => match ipv4::Ipv4Packet::new(eth.payload()) {
                                 Some(ipv4) => match tcp::TcpPacket::new(ipv4.payload()) {
                                     Some(tcp) => {
-                                        // SYN ACK
-                                        if tcp.get_flags() == TcpFlags::SYN | TcpFlags::ACK {
-                                            let initial_rseq = tcp.get_sequence();
-                                            info!(
-                                                "Received Remote Packet...............   {}",
-                                                sched_index + 1
-                                            );
-                                            info!("Remote Packet Expectation met.");
-                                            info!("Proceeding in replay....");
-                                            info!("Remote Sequence number: {}", initial_rseq);
-                                            // make schedule absolute based on received seq
-                                            sched_list[1].exp_rseq =
-                                                sched_list[1].exp_rseq.wrapping_add(initial_rseq);
-                                            for mut sched in sched_list.iter_mut().skip(2) {
-                                                match sched.remote_or_local {
-                                                    SchedType::Local => {
-                                                        sched.curr_lack = sched
-                                                            .curr_lack
-                                                            .wrapping_add(initial_rseq);
-                                                    }
-                                                    SchedType::Remote => {
-                                                        sched.exp_rseq = sched
-                                                            .exp_rseq
-                                                            .wrapping_add(initial_rseq);
+                                        if port_src == tcp.get_destination() {
+                                            // SYN ACK
+                                            if tcp.get_flags() == TcpFlags::SYN | TcpFlags::ACK {
+                                                syn_ack_encountered = true;
+                                                let initial_rseq = tcp.get_sequence();
+                                                info!(
+                                                    "Received Remote Packet...............   {}",
+                                                    sched_index + 1
+                                                );
+                                                info!("Remote Packet Expectation met.");
+                                                info!("Proceeding in replay....");
+                                                info!("Remote Sequence number: {}", initial_rseq);
+                                                // make schedule absolute based on received seq
+                                                sched_list[1].exp_rseq = sched_list[1]
+                                                    .exp_rseq
+                                                    .wrapping_add(initial_rseq);
+                                                for mut sched in sched_list.iter_mut().skip(2) {
+                                                    match sched.remote_or_local {
+                                                        SchedType::Local => {
+                                                            sched.curr_lack = sched
+                                                                .curr_lack
+                                                                .wrapping_add(initial_rseq);
+                                                        }
+                                                        SchedType::Remote => {
+                                                            sched.exp_rseq = sched
+                                                                .exp_rseq
+                                                                .wrapping_add(initial_rseq);
+                                                        }
                                                     }
                                                 }
+                                                sched_index += 1;
+                                                continue;
                                             }
-                                            sched_index += 1;
-                                            continue;
-                                        }
-                                        info!(">Received a Remote Packet");
-                                        info!(">>Checking Expectations");
+                                            if syn_ack_encountered {
+                                                info!(">Received a Remote Packet");
+                                                info!(">>Checking Expectations");
 
-                                        // Handle Remote Packet Loss
+                                                // Handle Remote Packet Loss
 
-                                        // No Packet Loss... Proceed Normally
-                                        if tcp.get_sequence() == cur_sched.exp_rseq
-                                            && tcp.get_acknowledgement() == cur_sched.exp_rack
-                                        {
-                                            info!("Received Remote Packet (as expected)");
-                                            if (cur_sched.exp_flags & TcpFlags::FIN) > 0 {
-                                                println!(
-                                                    "{}",
-                                                    String::from_utf8_lossy(tcp.payload())
-                                                );
+                                                // No Packet Loss... Proceed Normally
+                                                if tcp.get_sequence() == cur_sched.exp_rseq
+                                                    && tcp.get_acknowledgement()
+                                                        == cur_sched.exp_rack
+                                                {
+                                                    info!("Received Remote Packet (as expected)");
+                                                    if (cur_sched.exp_flags & TcpFlags::FIN) > 0 {
+                                                        // if FIN is expected in file we want to
+                                                        // interpret the push
+                                                        result = Some(tcp.payload().to_vec());
+                                                        // if next acknowlegement
+                                                        sched_list[sched_index + 1].curr_lack +=
+                                                            tcp.payload().len() as u32;
+                                                        // Essential fix! Wait to prevent the last
+                                                        // ACK from being sent ahead of time!
+                                                        thread::sleep(time::Duration::from_millis(
+                                                            100,
+                                                        ));
+                                                    }
+                                                    sched_index += 1;
+                                                } else {
+                                                    // dbg!(cur_sched.exp_rseq);
+                                                    // dbg!(cur_sched.exp_rack);
+                                                    info!("{:?},{:?}", tcp, ipv4);
+                                                }
+                                            } else {
+                                                if missing_syn_ack_counter > 3 {
+                                                    return None;
+                                                }
+                                                info!("watiting for SYN ACK");
+                                                missing_syn_ack_counter += 1;
                                             }
-                                            sched_index += 1;
-                                        } else {
-                                            dbg!(cur_sched.exp_rseq);
-                                            dbg!(cur_sched.exp_rack);
-                                            println!("{:?},{:?}", tcp, ipv4);
                                         }
                                     }
                                     None => {}
@@ -147,6 +183,7 @@ pub fn replay(interface: &str, file: &str, rand: bool, ip_dst: Ipv4Addr, mac_dst
             }
         }
     }
+    result
 }
 
 fn rewrite<P>(

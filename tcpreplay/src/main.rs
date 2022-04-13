@@ -43,5 +43,6 @@ fn main() {
         args.rand,
         args.ip_dst,
         args.mac_dst,
-    )
+        args.port_src,
+    );
 }
