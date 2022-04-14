@@ -1,3 +1,47 @@
+/**
+ * This program has been implemented heavily coping from https://github.com/appneta/tcpreplay/blob/master/src/tcpliveplay.c
+ *
+ * Program Description:
+ * This program replays a captured set of packets using new TCP connections against a live system
+ * similar to 'tcpliveplay'. A difference between this program and 'tcpliveplay' is that this
+ * programm expects one data packet after sending the FIN packet. This expected data packet is
+ * expected to be the interpretation of the of the data already sent.
+ * This program take in a "*.pcap" file that contains only one tcp flow connection and replays it
+ * against a live host exactly how the captured packets are laid out. At the beginning, the program
+ * establishes who the 'client is and the 'server' is based on who initiates the SYN compares each
+ * packet's source ip against the ip of the client (which is named local in the code) and the
+ * (remote) to correctly determine the expected seg & acks. This also extracts the MACs of both
+ * local and reomte clients. The program is also capable of rewriting the local and remote MAC & IP
+ * so that the packets are properly replayed when used on live networks. The current state of the
+ * program is that it takes in a pcap file on command line and writes a new file called
+ * "newfile.pcap" in which the MACs/IPs/PORTs are adjusted. This file is used thereafter for the
+ * rest of the program's calculations and set expectations. Once the program is done,
+ * "newfile.pcap" is cleand up.
+ *
+ * Program Design Overview:
+ * Before replaying the packets, the program reads in the pcap file that contains one tcp flow,
+ * and takes the SEQ/ACK #s.
+ * Based on the number of packets, a struct schedule of events are is set up. Based on
+ * the SEQ/ACK numbers read in, the schedule is setup to be relative numbers rather than
+ * absolute. This is done by starting with local packets, subtracting the first SEQ (which
+ * is that of the first SYN packet) from all the SEQs of the local packets then by subtracting
+ * the first remote sequence (which is that of the SYN-ACK packet) from all the local packet's
+ * ACKs. After the local side SEQ/ACK numbers are fixed to relative numbers, 'lseq_adjust'
+ * the locally generated random number for the SYN packet gets added to all the local SEQs (if the
+ * random option is activated) to adjust the schedule to absolute number configuration. Then doing
+ * the remote side is similar except we only fix the remote ACKs based on our locally generated
+ * random number because we do not yet know the remote random number of the SYN-ACK packet. This
+ * means that at this point the entire schedule of local packets and remote packets are set in such
+ * a way that the local packets' SEQ's are absolute, but ACKs are relative and the remote packets'
+ * SEQ's are relative but ACKs as absolute. Once this is set, the replay starts by sending first
+ * SYN packet. If the remote host's acks with the SYN packet_SEQ+1 then we save their remote SEQ
+ * and adjust the local ACKs and remote SEQs in the struct schedule to be absolute based this
+ * remote SEQ. From this point on forward, we know or 'expect' what the remote host's ACKs and SEQs
+ * are exactly. If the remote host responds correctly as we expect (checking the schedule position
+ * expectation as packets are received) then we proceed in the schedule whether the next event is
+ * to send a local packet or wait for a remote packet to arrive.
+ */
+use std::fs;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::{thread, time};
@@ -183,9 +227,17 @@ where
             }
         }
     }
+    // TODO: delete newfile.pcap!
+    match fs::remove_file("newfile.pcap") {
+        Ok(()) => info!("newfile has been cleaned up"),
+        Err(e) => info!("{}", e),
+    }
     result
 }
 
+/// This method take a pcap file filters out only the tcp packets and adjusts MAC/IP/PORT to the
+/// provided information. In addition to that the checksums are fixed if they have been correct
+/// before and the resulting packets are written to a new file "newfile.pcap"
 fn rewrite<P>(
     new_remoteip: Ipv4Addr,
     new_remotemac: MacAddr,
@@ -200,14 +252,17 @@ fn rewrite<P>(
     let mut local_ip = None;
     let mut local_port = None;
     let mut reader = Capture::from_file(file).expect("reader");
+    // filter out only tcp
     if let Err(e) = reader.filter("tcp", true) {
         eprintln!("{:?}", e);
         panic!("Error applying filter to input file")
     }
 
+    // prepare saving to file
     let save = Capture::dead(pcap::Linktype::ETHERNET).unwrap();
     let mut savefile = save.savefile(TMP_FILE);
 
+    // loop over tcp packets
     while let Ok(packet) = reader.next() {
         let mut ip_checksum_correct = false;
         let mut tcp_checksum_correct = false;
