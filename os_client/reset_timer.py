@@ -1,3 +1,4 @@
+# https://gist.github.com/aeroaks/ac4dbed9c184607a330c
 from threading import Thread, Event, Timer
 import time
 

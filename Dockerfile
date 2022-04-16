@@ -9,7 +9,7 @@ RUN pacman -S wireshark-cli --noconfirm
 # # Install rust
 # RUN apk --no-cache add clang lld curl
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y
-ENV PATH="$HOME/.cargo/bin:$PATH"
+ENV PATH="/root/.cargo/bin:$PATH"
 # 
 # RUN apk add --no-cache git make cmake python2-dev python2 && \
 # 	python2 -m ensurepip 
