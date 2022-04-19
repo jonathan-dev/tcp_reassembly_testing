@@ -57,3 +57,7 @@ __mac__/__ip__, the name of the __interface__ to use and the
 __local port__ to be used. But before executing the command the
 Operating System to be tested must execute the OS client that is
 contained in the `os-client` folder.
+
+For local tests a virtual box running kali linux was used with the
+network settings set to `Bridged Adapter` and then selecting the name of
+the standard wifi card.
