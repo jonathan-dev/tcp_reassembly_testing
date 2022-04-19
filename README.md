@@ -12,8 +12,7 @@ Here the following command can be run:
 ```sudo docker build --tag reassembly_test_framework .```
 
 After that we can launch the Docker image interactively using:
-```sudo docker run -i -t --network host reassembly_test_framework
-/bin/bash```
+```sudo docker run -i -t --network host reassembly_test_framework /bin/bash```
 
 The `--network host` part of the command is important for using the
 `test-os` subcommand of the test framework.
