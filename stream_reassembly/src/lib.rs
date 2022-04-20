@@ -1,11 +1,11 @@
 #![feature(map_first_last)]
-#![macro_use]
-mod debug;
 pub mod reassembler;
 
+use log::info;
 // configuration option:
 // - connection
 //
+use env_logger;
 use pdu::*;
 use reassembler::Reassembler;
 use std::path::Path;
@@ -18,8 +18,7 @@ impl PcapReassembler {
     where
         P: AsRef<Path>,
     {
-        // let file =
-        //     File::open("/home/jo/master/tcp_reassembly_test_framework/attacks/test.pcap").unwrap();
+        env_logger::init();
         let mut reassembler = reassembler::Reassembler::new();
         let mut reader = pcap::Capture::from_file(file).expect("capture");
         if let Some(filter) = filter {
@@ -56,7 +55,7 @@ impl PcapReassembler {
                                         if tcp_packet.checksum() == computed_checksum {
                                             reassembler.process(ipv4_pdu);
                                         } else {
-                                            debug_print!(
+                                            info!(
                                                 "encountered wrong checksum in packet {}!",
                                                 packet_num
                                             );

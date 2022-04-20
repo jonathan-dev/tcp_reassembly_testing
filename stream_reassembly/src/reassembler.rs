@@ -1,8 +1,8 @@
 #![allow(dead_code)]
+use log::info;
 use pdu::Tcp;
 use pdu::*;
 use std::cell::RefCell;
-use std::cmp;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::iter::Iterator;
@@ -14,8 +14,7 @@ use std::rc::Weak;
 use std::slice::Iter;
 use std::usize;
 
-use crate::debug_print;
-
+#[derive(PartialEq)]
 enum TcpState {
     SynRcvd,
     Estab,
@@ -62,28 +61,28 @@ impl TcpStream {
         if packet.ack() {
             self.ack = packet.acknowledgement_number();
         }
-        if packet.syn() && matches!(self.state, TcpState::Closed) {
-            // TODO: use wrapping add!
+        // 3-way handshake
+        if packet.syn() && self.state == TcpState::Closed {
             self.next_seq = packet.sequence_number().wrapping_add(1);
             self.state = TcpState::SynRcvd;
-            debug_print!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
+            info!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
         }
-        if matches!(self.state, TcpState::SynRcvd) {
+        if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
-                // partner available
+                // partner available -> SYN ACK received
                 let partner_seq = partner.upgrade().unwrap().borrow_mut().next_seq;
                 if partner_seq == self.ack {
                     // do this in reverse!!!
                     self.state = TcpState::Estab;
-                    debug_print!(
+                    info!(
                         "{} -> {} +++ Connection established +++",
-                        self.key.src.1,
-                        self.key.dst.1
+                        self.key.src.1, self.key.dst.1
                     );
                 }
             }
         }
-        if packet.psh() && matches!(self.state, TcpState::Estab) {
+        // data packet
+        if packet.psh() && self.state == TcpState::Estab {
             self.delayed
                 .entry(packet.sequence_number())
                 .or_default()
@@ -97,9 +96,9 @@ impl TcpStream {
         let overlap = self.next_seq - packet.sequence_number();
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
-                let mut overlap_data = data[..cmp::min(overlap as usize, data.len())]
-                    .iter()
-                    .zip(packet.sequence_number()..);
+                // let mut overlap_data = data[..cmp::min(overlap as usize, data.len())]
+                //     .iter()
+                //     .zip(packet.sequence_number()..);
                 // self.check_overlap(&mut overlap_data);
                 if overlap > data.len() as u32 {
                     // packet completly overlaps with already received data
@@ -110,7 +109,6 @@ impl TcpStream {
                     vec = choosen_data.to_vec();
                 }
             } else {
-                // adjust packet content
                 vec = data.to_vec();
             }
 
@@ -156,7 +154,7 @@ impl TcpStream {
                     new: byte.clone(),
                     orig,
                 });
-                debug_print!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
+                info!("found overlapping attack at sequence number {}. Byte found: {} previously received: {}", seq, byte, orig);
             }
         }
     }
@@ -169,7 +167,8 @@ pub struct FlowKey {
 }
 
 impl FlowKey {
-    fn swap_flow_key(&self) -> FlowKey {
+    /// swap src and dst
+    fn reverse_flow(&self) -> FlowKey {
         FlowKey {
             dst: self.src,
             src: self.dst,
@@ -189,7 +188,7 @@ impl Reassembler {
         }
     }
 
-    /// Choose or create stream in hashmap
+    /// Choose or create stream in hashmap (depending on src port/ip and dst port/ip)
     /// on newly created streams try to set the partner stream
     pub fn process(&mut self, ip_packet: Ipv4Pdu) {
         if let Ok(Ipv4::Tcp(tcp_packet)) = ip_packet.inner() {
@@ -215,7 +214,7 @@ impl Reassembler {
 
             // try to find partner
             if new_stream {
-                match self.streams.entry(key.swap_flow_key()) {
+                match self.streams.entry(key.reverse_flow()) {
                     Entry::Occupied(partner) => {
                         // set Partner references
                         Rc::clone(&cur_stream).borrow_mut().partner =
@@ -223,10 +222,10 @@ impl Reassembler {
                         Rc::clone(&partner.get()).borrow_mut().partner =
                             Some(Rc::downgrade(&cur_stream));
                     }
-                    Entry::Vacant(_v) => {}
+                    _ => {}
                 }
             }
-
+            // add packet to current stream
             Rc::clone(&cur_stream).borrow_mut().add(tcp_packet);
         }
     }
