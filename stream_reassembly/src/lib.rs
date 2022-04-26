@@ -47,16 +47,24 @@ impl PcapReassembler {
                                     }
                                     if ipv4_pdu.more_fragments() {
                                         // TODO: handle Ip fragmentation
+                                        info!("IPv4 fragmentation detected");
                                         unimplemented!();
                                     }
+                                    if ipv4_pdu.checksum() != ipv4_pdu.computed_checksum() {
+                                        info!(
+                                            "encountered wrong checksum in IPv4 packet {}!",
+                                            packet_num
+                                        );
+                                        continue;
+                                    }
                                     if let Ok(Ipv4::Tcp(tcp_packet)) = ipv4_pdu.inner() {
-                                        let computed_checksum =
+                                        let computed_checksum_tcp =
                                             tcp_packet.computed_checksum(&Ip::Ipv4(ipv4_pdu));
-                                        if tcp_packet.checksum() == computed_checksum {
+                                        if tcp_packet.checksum() == computed_checksum_tcp {
                                             reassembler.process(ipv4_pdu);
                                         } else {
                                             info!(
-                                                "encountered wrong checksum in packet {}!",
+                                                "encountered wrong checksum in TCP packet {}!",
                                                 packet_num
                                             );
                                         }

@@ -24,15 +24,12 @@ fn main() {
     let cli = Cli::parse();
 
     if let Some(config_path) = cli.file.as_deref() {
-        // println!("Value for file: {}", config_path.display());
-        let key_of_interest = FlowKey {
-            src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
-            dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
-        };
-
         let mut reassembler = PcapReassembler::read_file(config_path, cli.filter.as_deref());
 
-        if let Some(stream_data) = reassembler.find(|(key, _, _)| key == &key_of_interest) {
+        if let Some(stream_data) = reassembler.next() {
+            print!("{}", String::from_utf8_lossy(&stream_data.1))
+        }
+        if let Some(stream_data) = reassembler.next() {
             print!("{}", String::from_utf8_lossy(&stream_data.1))
         }
     }

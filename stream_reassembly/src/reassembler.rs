@@ -2,16 +2,16 @@
 use log::info;
 use pdu::Tcp;
 use pdu::*;
-use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::iter::Zip;
 use std::net::Ipv4Addr;
 use std::ops::RangeFrom;
-use std::rc::Rc;
-use std::rc::Weak;
 use std::slice::Iter;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::Weak;
 use std::usize;
 
 #[derive(PartialEq)]
@@ -36,7 +36,7 @@ struct TcpStream {
     delayed: BTreeMap<u32, Vec<Vec<u8>>>,
     next_seq: u32,
     ack: u32,
-    partner: Option<Weak<RefCell<TcpStream>>>,
+    partner: Option<Weak<Mutex<TcpStream>>>,
     reass_buff: Vec<u8>,
     inconsistencies: Vec<Inconsistency>,
     initial_seq: u32,
@@ -76,11 +76,12 @@ impl TcpStream {
         if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
                 // partner available -> SYN ACK received
-                let partner_seq = partner.upgrade().unwrap().borrow().next_seq;
+                // TODO: Mutex error handling
+                let partner_seq = partner.upgrade().unwrap().lock().unwrap().next_seq;
                 if partner_seq
                     == self
                         .ack
-                        .wrapping_sub(partner.upgrade().unwrap().borrow().initial_seq)
+                        .wrapping_sub(partner.upgrade().unwrap().lock().unwrap().initial_seq)
                 {
                     // do this in reverse!!!
                     self.state = TcpState::Estab;
@@ -182,8 +183,9 @@ impl FlowKey {
 }
 
 pub struct Reassembler {
-    /// TcpStream is Rc RefCell bcause of referencen in partner stream
-    streams: BTreeMap<FlowKey, Rc<RefCell<TcpStream>>>,
+    /// TcpStream is Arc Mutex bcause of referencen in partner stream (Arc because of python
+    /// interface)
+    streams: BTreeMap<FlowKey, Arc<Mutex<TcpStream>>>,
 }
 
 impl Reassembler {
@@ -215,7 +217,7 @@ impl Reassembler {
 
                         // assign stream to empty entry
                         let cur_stream = v
-                            .insert(Rc::new(RefCell::new(TcpStream::new(
+                            .insert(Arc::new(Mutex::new(TcpStream::new(
                                 key.clone(),
                                 tcp_packet.sequence_number(),
                             ))))
@@ -224,10 +226,10 @@ impl Reassembler {
                         // try finding partner stream
                         if let Entry::Occupied(partner) = self.streams.entry(key.reverse_flow()) {
                             // set Partner references
-                            Rc::clone(&cur_stream).borrow_mut().partner =
-                                Some(Rc::downgrade(partner.get()));
-                            Rc::clone(&partner.get()).borrow_mut().partner =
-                                Some(Rc::downgrade(&cur_stream));
+                            Arc::clone(&cur_stream).lock().unwrap().partner =
+                                Some(Arc::downgrade(partner.get()));
+                            Arc::clone(&partner.get()).lock().unwrap().partner =
+                                Some(Arc::downgrade(&cur_stream));
                         }
                         Some(cur_stream)
                     } else {
@@ -237,7 +239,7 @@ impl Reassembler {
             };
 
             match cur_stream {
-                Some(cur_stream) => Rc::clone(&cur_stream).borrow_mut().add(tcp_packet),
+                Some(cur_stream) => Arc::clone(&cur_stream).lock().unwrap().add(tcp_packet),
                 None => info!("Ignoring packet not belongingto any known stream"),
             }
         }
@@ -250,8 +252,8 @@ impl Iterator for Reassembler {
     fn next(&mut self) -> Option<Self::Item> {
         let ret_val = match self.streams.pop_first() {
             Some((key, val)) => {
-                let stream_cloned = Rc::clone(&val);
-                let mut stream_mut_ref = stream_cloned.borrow_mut();
+                let stream_cloned = Arc::clone(&val);
+                let mut stream_mut_ref = stream_cloned.lock().unwrap();
                 stream_mut_ref.check_delayed();
                 Some((
                     key,
