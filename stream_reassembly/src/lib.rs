@@ -18,7 +18,7 @@ impl PcapReassembler {
     where
         P: AsRef<Path>,
     {
-        env_logger::init();
+        env_logger::try_init();
         let mut reassembler = reassembler::Reassembler::new();
         let mut reader = pcap::Capture::from_file(file).expect("capture");
         if let Some(filter) = filter {
@@ -95,8 +95,24 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let file_name =
-            "/home/jo/master/tcp_reassembly_test_framework/attacks/sturges-novak-model.pcap";
+        let file_name = "../test_framework/attacks/sturges-novak-model.pcap";
+        let key_of_interest = FlowKey {
+            src: (Ipv4Addr::new(192, 168, 8, 31), 6001),
+            dst: (Ipv4Addr::new(192, 168, 8, 29), 6000),
+        };
+        let mut reass = super::PcapReassembler::read_file(file_name, None);
+        if let Some(stream_data) = reass.find(|(key, _, _)| key == &key_of_interest) {
+            assert_eq!(
+                str::from_utf8(&stream_data.1).unwrap(),
+                "0AAAJJBCCCLLLMMMFFFGGHHIQ"
+            );
+            return;
+        };
+        assert!(false);
+    }
+    #[test]
+    fn wrapping() {
+        let file_name = "../test_framework/attacks/sturges-novak-model-wrap_4294967281.pcap";
         let key_of_interest = FlowKey {
             src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
             dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),

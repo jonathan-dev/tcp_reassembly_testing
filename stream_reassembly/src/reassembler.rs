@@ -39,10 +39,11 @@ struct TcpStream {
     partner: Option<Weak<RefCell<TcpStream>>>,
     reass_buff: Vec<u8>,
     inconsistencies: Vec<Inconsistency>,
+    initial_seq: u32,
 }
 
 impl TcpStream {
-    fn new(key: FlowKey) -> TcpStream {
+    fn new(key: FlowKey, initial_seq: u32) -> TcpStream {
         TcpStream {
             state: TcpState::Closed,
             key,
@@ -52,6 +53,7 @@ impl TcpStream {
             partner: None,
             reass_buff: vec![],
             inconsistencies: vec![],
+            initial_seq,
         }
     }
 
@@ -59,19 +61,27 @@ impl TcpStream {
     fn add(&mut self, packet: pdu::TcpPdu) {
         // set ack
         if packet.ack() {
+            // TODO: wrappin initial_seq adjustment
             self.ack = packet.acknowledgement_number();
         }
         // 3-way handshake
         if packet.syn() && self.state == TcpState::Closed {
-            self.next_seq = packet.sequence_number().wrapping_add(1);
+            self.next_seq = packet
+                .sequence_number()
+                .wrapping_sub(self.initial_seq)
+                .wrapping_add(1);
             self.state = TcpState::SynRcvd;
             info!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
         }
         if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
                 // partner available -> SYN ACK received
-                let partner_seq = partner.upgrade().unwrap().borrow_mut().next_seq;
-                if partner_seq == self.ack {
+                let partner_seq = partner.upgrade().unwrap().borrow().next_seq;
+                if partner_seq
+                    == self
+                        .ack
+                        .wrapping_sub(partner.upgrade().unwrap().borrow().initial_seq)
+                {
                     // do this in reverse!!!
                     self.state = TcpState::Estab;
                     info!(
@@ -84,7 +94,7 @@ impl TcpStream {
         // data packet
         if packet.psh() && self.state == TcpState::Estab {
             self.delayed
-                .entry(packet.sequence_number())
+                .entry(packet.sequence_number().wrapping_sub(self.initial_seq))
                 .or_default()
                 .push(packet.into_buffer().to_vec());
         }
@@ -93,13 +103,9 @@ impl TcpStream {
     /// append packet that has the next seq number to the stream (overlap handling)
     fn accept_packet(&mut self, packet: pdu::TcpPdu) {
         let mut vec;
-        let overlap = self.next_seq - packet.sequence_number();
+        let overlap = self.next_seq - packet.sequence_number().wrapping_sub(self.initial_seq);
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
-                // let mut overlap_data = data[..cmp::min(overlap as usize, data.len())]
-                //     .iter()
-                //     .zip(packet.sequence_number()..);
-                // self.check_overlap(&mut overlap_data);
                 if overlap > data.len() as u32 {
                     // packet completly overlaps with already received data
                     vec = Vec::new();
@@ -123,7 +129,6 @@ impl TcpStream {
         if let Some(entry) = self.delayed.first_entry() {
             // check the first entry
             if entry.key() <= &self.next_seq {
-                // TODO: condition is problematic concerning wrapping if seq hasn't wrapped yet we
                 // take the fist entry (list of chunks) (multimap)
                 let mut data_chunks = self.delayed.pop_first().unwrap();
                 // take first data chunk
@@ -202,31 +207,39 @@ impl Reassembler {
                     tcp_packet.destination_port(),
                 ),
             };
-            let mut new_stream = false;
             let cur_stream = match self.streams.entry(key.clone()) {
-                Entry::Occupied(stream) => stream.into_mut().to_owned(),
+                Entry::Occupied(stream) => Some(stream.into_mut().to_owned()),
                 Entry::Vacant(v) => {
-                    new_stream = true;
-                    v.insert(Rc::new(RefCell::new(TcpStream::new(key.clone()))))
-                        .to_owned()
+                    if tcp_packet.syn() {
+                        // new stream only on SYN
+
+                        // assign stream to empty entry
+                        let cur_stream = v
+                            .insert(Rc::new(RefCell::new(TcpStream::new(
+                                key.clone(),
+                                tcp_packet.sequence_number(),
+                            ))))
+                            .to_owned();
+
+                        // try finding partner stream
+                        if let Entry::Occupied(partner) = self.streams.entry(key.reverse_flow()) {
+                            // set Partner references
+                            Rc::clone(&cur_stream).borrow_mut().partner =
+                                Some(Rc::downgrade(partner.get()));
+                            Rc::clone(&partner.get()).borrow_mut().partner =
+                                Some(Rc::downgrade(&cur_stream));
+                        }
+                        Some(cur_stream)
+                    } else {
+                        None
+                    }
                 }
             };
 
-            // try to find partner
-            if new_stream {
-                match self.streams.entry(key.reverse_flow()) {
-                    Entry::Occupied(partner) => {
-                        // set Partner references
-                        Rc::clone(&cur_stream).borrow_mut().partner =
-                            Some(Rc::downgrade(partner.get()));
-                        Rc::clone(&partner.get()).borrow_mut().partner =
-                            Some(Rc::downgrade(&cur_stream));
-                    }
-                    _ => {}
-                }
+            match cur_stream {
+                Some(cur_stream) => Rc::clone(&cur_stream).borrow_mut().add(tcp_packet),
+                None => info!("Ignoring packet not belongingto any known stream"),
             }
-            // add packet to current stream
-            Rc::clone(&cur_stream).borrow_mut().add(tcp_packet);
         }
     }
 }
@@ -251,5 +264,3 @@ impl Iterator for Reassembler {
         ret_val
     }
 }
-
-// TODO: how to deal with wrapping sequence numbers
