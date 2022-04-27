@@ -107,6 +107,10 @@ impl TcpStream {
         let overlap = self.next_seq - packet.sequence_number().wrapping_sub(self.initial_seq);
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
+                let mut overlap_data = data[..std::cmp::min(overlap as usize, data.len())]
+                    .iter()
+                    .zip(packet.sequence_number().wrapping_sub(self.initial_seq)..);
+                self.check_overlap(&mut overlap_data);
                 if overlap > data.len() as u32 {
                     // packet completly overlaps with already received data
                     vec = Vec::new();
@@ -149,6 +153,7 @@ impl TcpStream {
         self.check_delayed();
     }
 
+    /// get received byte ziped with its sequence number (calculated relative)
     fn check_overlap(&mut self, iter: &mut Zip<Iter<u8>, RangeFrom<u32>>) {
         for (byte, seq) in iter {
             let delta = self.next_seq - seq;
