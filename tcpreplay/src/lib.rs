@@ -132,7 +132,7 @@ where
             }
 
             SchedType::Remote => {
-                // info!("waiting for packet");
+                info!("waiting for packet");
                 // === Receive Packet ===
                 match cap_active.next() {
                     Ok(packet) => {
@@ -187,18 +187,23 @@ where
                                                     info!("Received Remote Packet (as expected)");
                                                     if (cur_sched.exp_flags & TcpFlags::FIN) > 0 {
                                                         // if FIN is expected in file we want to
-                                                        // interpret the push
-                                                        result = Some(tcp.payload().to_vec());
-                                                        // if next acknowlegement
-                                                        sched_list[sched_index + 1].curr_lack +=
-                                                            tcp.payload().len() as u32;
-                                                        // Essential fix! Wait to prevent the last
-                                                        // ACK from being sent ahead of time!
-                                                        thread::sleep(time::Duration::from_millis(
-                                                            100,
-                                                        ));
+                                                        // interpret wait for a push
+                                                        if (tcp.get_flags() & TcpFlags::PSH) > 0 {
+                                                            result = Some(tcp.payload().to_vec());
+                                                            // if next acknowlegement
+                                                            sched_list[sched_index + 1]
+                                                                .curr_lack +=
+                                                                tcp.payload().len() as u32;
+                                                            // Essential fix! Wait to prevent the last
+                                                            // ACK from being sent ahead of time!
+                                                            thread::sleep(
+                                                                time::Duration::from_millis(100),
+                                                            );
+                                                            sched_index += 1;
+                                                        }
+                                                    } else {
+                                                        sched_index += 1;
                                                     }
-                                                    sched_index += 1;
                                                 } else {
                                                     // dbg!(cur_sched.exp_rseq);
                                                     // dbg!(cur_sched.exp_rack);
@@ -227,7 +232,6 @@ where
             }
         }
     }
-    // TODO: delete newfile.pcap!
     match fs::remove_file("newfile.pcap") {
         Ok(()) => info!("newfile has been cleaned up"),
         Err(e) => info!("{}", e),

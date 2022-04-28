@@ -19,7 +19,7 @@ test_num = 0
 while True:
   conn, addr = s.accept()
   if test_num == 0:
-    rt = reset_timer.TimerReset(10, callback)
+    rt = reset_timer.TimerReset(30, callback)
     rt.start()
   else:
     rt.reset()
