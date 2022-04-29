@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::iter::Iterator;
 use std::iter::Zip;
 use std::net::Ipv4Addr;
+use std::net::SocketAddrV4;
 use std::ops::RangeFrom;
 use std::slice::Iter;
 use std::sync::Arc;
@@ -23,9 +24,9 @@ enum TcpState {
 
 #[derive(Clone)]
 pub struct Inconsistency {
-    seq: u32,
-    new: u8,
-    orig: u8,
+    pub seq: u32,
+    pub new: u8,
+    pub orig: u8,
 }
 
 /// TcpStream
@@ -71,7 +72,11 @@ impl TcpStream {
                 .wrapping_sub(self.initial_seq)
                 .wrapping_add(1);
             self.state = TcpState::SynRcvd;
-            info!("{} -> {} +++ SynRcvd +++", self.key.src.1, self.key.dst.1);
+            info!(
+                "{} -> {} +++ SynRcvd +++",
+                self.key.src.ip(),
+                self.key.dst.ip()
+            );
         }
         if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
@@ -87,7 +92,8 @@ impl TcpStream {
                     self.state = TcpState::Estab;
                     info!(
                         "{} -> {} +++ Connection established +++",
-                        self.key.src.1, self.key.dst.1
+                        self.key.src.ip(),
+                        self.key.dst.ip()
                     );
                 }
             }
@@ -173,8 +179,8 @@ impl TcpStream {
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
 pub struct FlowKey {
-    pub src: (Ipv4Addr, u16),
-    pub dst: (Ipv4Addr, u16),
+    pub src: SocketAddrV4,
+    pub dst: SocketAddrV4,
 }
 
 impl FlowKey {
@@ -205,11 +211,11 @@ impl Reassembler {
     pub fn process(&mut self, ip_packet: Ipv4Pdu) {
         if let Ok(Ipv4::Tcp(tcp_packet)) = ip_packet.inner() {
             let key = FlowKey {
-                src: (
+                src: SocketAddrV4::new(
                     Ipv4Addr::from(ip_packet.source_address()),
                     tcp_packet.source_port(),
                 ),
-                dst: (
+                dst: SocketAddrV4::new(
                     Ipv4Addr::from(ip_packet.destination_address()),
                     tcp_packet.destination_port(),
                 ),
