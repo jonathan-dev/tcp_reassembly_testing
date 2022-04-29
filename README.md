@@ -58,6 +58,16 @@ __local port__ to be used. But before executing the command the
 Operating System to be tested must execute the OS client that is
 contained in the `os-client` folder.
 
+In addition to that it will be necessary to put a firewall rule into
+place that prevents the Kernel from sending RST packets. The sending of
+the RST packets is caused by the receiving of packets on ports that the
+Kernel is no using.
+
+```sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -d 192.168.8.31 -j DROP```
+
+In this command the IP 192.168.8.31 needs to be replaced with the ip of
+target to test.
+
 For local tests a virtual box running kali linux was used with the
 network settings set to `Bridged Adapter` and then selecting the name of
 the standard wifi card.
