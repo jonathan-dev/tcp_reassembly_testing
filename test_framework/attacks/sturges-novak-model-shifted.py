@@ -131,7 +131,7 @@ def segment(i):
     pack1 = ip / tcp / seg1
     packets.append(pack1)
 
-    ack_tcp = TCP(dport=sp, sport=dp, flags="A", seq=ISN_receiver + 1, ack=tcpseq)  # TODO: note + 1
+    ack_tcp = TCP(dport=sp, sport=dp, flags="A", seq=ISN_receiver + 1, ack=tcpseq)
     ack = ip_reverse / ack_tcp
     packets.append(ack)
 

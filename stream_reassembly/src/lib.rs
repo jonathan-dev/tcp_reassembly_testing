@@ -1,11 +1,8 @@
 #![feature(map_first_last)]
 pub mod reassembler;
 
-use log::info;
-// configuration option:
-// - connection
-//
 use env_logger;
+use log::info;
 use pdu::*;
 use reassembler::Reassembler;
 use std::path::Path;
@@ -18,7 +15,7 @@ impl PcapReassembler {
     where
         P: AsRef<Path>,
     {
-        env_logger::try_init();
+        env_logger::try_init().unwrap_or(());
         let mut reassembler = reassembler::Reassembler::new();
         let mut reader = pcap::Capture::from_file(file).expect("capture");
         if let Some(filter) = filter {
@@ -46,7 +43,6 @@ impl PcapReassembler {
                                         println!("illeagal flag combination");
                                     }
                                     if ipv4_pdu.more_fragments() {
-                                        // TODO: handle Ip fragmentation
                                         info!("IPv4 fragmentation detected");
                                         unimplemented!();
                                     }
@@ -70,11 +66,8 @@ impl PcapReassembler {
                                         }
                                     }
                                 }
-                                Ok(Ethernet::Ipv6(_ipv6_pdu)) => {
-                                    // unimplemented!();
-                                }
                                 Ok(_other) => {
-                                    // panic!("Unexpected protocol {:?}", other);
+                                    // Just ignore packets other than ipv4
                                 }
                                 Err(e) => {
                                     panic!("EthernetPdu::inner() parser failure: {:?}", e);
@@ -87,7 +80,6 @@ impl PcapReassembler {
                     }
                 }
                 Err(pcap::Error::NoMorePackets) => break,
-                // TODO: add more error handling
                 Err(e) => panic!("error while reading: {:?}", e),
             }
         }
@@ -98,15 +90,15 @@ impl PcapReassembler {
 #[cfg(test)]
 mod tests {
     use crate::reassembler::FlowKey;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddrV4};
     use std::str;
 
     #[test]
-    fn it_works() {
+    fn basic_reassembly() {
         let file_name = "../test_framework/attacks/sturges-novak-model.pcap";
         let key_of_interest = FlowKey {
-            src: (Ipv4Addr::new(192, 168, 8, 31), 6001),
-            dst: (Ipv4Addr::new(192, 168, 8, 29), 6000),
+            src: SocketAddrV4::new(Ipv4Addr::new(192, 168, 8, 31), 6001),
+            dst: SocketAddrV4::new(Ipv4Addr::new(192, 168, 8, 29), 6000),
         };
         let mut reass = super::PcapReassembler::read_file(file_name, None);
         if let Some(stream_data) = reass.find(|(key, _, _)| key == &key_of_interest) {
@@ -119,11 +111,11 @@ mod tests {
         assert!(false);
     }
     #[test]
-    fn wrapping() {
+    fn wrapping_reassembly() {
         let file_name = "../test_framework/attacks/sturges-novak-model-wrap_4294967281.pcap";
         let key_of_interest = FlowKey {
-            src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
-            dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
+            src: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6001),
+            dst: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6000),
         };
         let mut reass = super::PcapReassembler::read_file(file_name, None);
         if let Some(stream_data) = reass.find(|(key, _, _)| key == &key_of_interest) {

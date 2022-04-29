@@ -62,7 +62,6 @@ impl TcpStream {
     fn add(&mut self, packet: pdu::TcpPdu) {
         // set ack
         if packet.ack() {
-            // TODO: wrappin initial_seq adjustment
             self.ack = packet.acknowledgement_number();
         }
         // 3-way handshake
@@ -81,7 +80,6 @@ impl TcpStream {
         if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
                 // partner available -> SYN ACK received
-                // TODO: Mutex error handling
                 let partner_seq = partner.upgrade().unwrap().lock().unwrap().next_seq;
                 if partner_seq
                     == self

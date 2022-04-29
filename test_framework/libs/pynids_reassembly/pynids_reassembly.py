@@ -1,7 +1,6 @@
 #! /usr/bin/env python2
 
 import os, pwd
-# TODO: replace getopt
 import sys, getopt
 import nids
 

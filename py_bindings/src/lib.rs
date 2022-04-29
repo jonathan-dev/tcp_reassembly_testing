@@ -1,13 +1,7 @@
-use std::{fmt::Display, net::SocketAddrV4, ops::Deref, usize};
+use std::{fmt::Display, net::SocketAddrV4, ops::Deref};
 
 use pyo3::prelude::*;
 use stream_reassembly::reassembler::*;
-
-/// Formats the sum of two numbers as string.
-#[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
-}
 
 #[pyclass]
 struct Reass {
@@ -53,8 +47,7 @@ impl Reass {
 
 #[pymodule]
 fn py_bindings(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    m.add_class::<Reass>();
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
+    m.add_class::<Reass>()?;
     Ok(())
 }
 
@@ -67,14 +60,6 @@ struct PyFlowKey {
     #[pyo3(get)]
     dst: PySockAddrV4,
 }
-
-// #[pymethods]
-// impl PyFlowKey {
-//     #[getter]
-//     fn src(&self) -> PyResult<PySockAddrV4> {
-//         Ok(self.src)
-//     }
-// }
 
 #[derive(Clone, Debug)]
 struct PySockAddrV4(SocketAddrV4);
