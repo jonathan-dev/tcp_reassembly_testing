@@ -1,4 +1,32 @@
-# Description
+# TRT (TCP reassembly testing)
+
+TRT is framework for testing the behaviour of different TCP
+stream reassembly implementations. It can be used to test different
+libraries of OS network stacks. The main goal of this effort is to
+detect potential inconsistencies.
+
+The figure below illustrates an inconsistency appearing between
+Wireshark and Windows. The Inconsistencies exist because the TCP
+standard doesn't cover how overlapping packages should be reassembled.
+
+The Example in the image below contains three data packages that are
+sent:
+
+```
+|   Package1   |  | Package2|
+GET / HTTP/1.1\r..PUT /attack
+................\nGET /office
+                |  Package3 |
+```
+
+The packages are sent in order (1,2,3) and Positions indicate the
+sequence numbers of the bytes (where bytes in the second row can overlap
+things in the first row. The dots indicate missing bytes (holes in the
+stream (except the one in the HTTP version of cause). I also can be
+noted that `\r` and `\n` stand representative for only on special each
+in the actual package data send.
+
+![](./img/motivating_example.png)
 
 
 ## Installation
