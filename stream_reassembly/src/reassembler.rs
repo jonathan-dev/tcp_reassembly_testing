@@ -76,6 +76,11 @@ impl TcpStream {
                 self.key.src.ip(),
                 self.key.dst.ip()
             );
+            // handle data on syn (add packet to delayed)
+            self.delayed
+                .entry(1) // key should always be 1 (0 should be the initial seq)
+                .or_default()
+                .push(packet.into_buffer().to_vec());
         }
         if packet.ack() && self.state == TcpState::SynRcvd {
             if let Some(partner) = &self.partner {
@@ -108,7 +113,16 @@ impl TcpStream {
     /// append packet that has the next seq number to the stream (overlap handling)
     fn accept_packet(&mut self, packet: pdu::TcpPdu) {
         let mut vec;
-        let overlap = self.next_seq - packet.sequence_number().wrapping_sub(self.initial_seq);
+        // adjustment necessary to have the correct sequence number on syn packets with data
+        let syn_add_one = match packet.syn() {
+            true => 1,
+            false => 0,
+        };
+        let overlap = self.next_seq
+            - packet
+                .sequence_number()
+                .wrapping_sub(self.initial_seq)
+                .wrapping_add(syn_add_one);
         if let Ok(Tcp::Raw(data)) = packet.inner() {
             if overlap > 0 {
                 let mut overlap_data = data[..std::cmp::min(overlap as usize, data.len())]
@@ -139,12 +153,12 @@ impl TcpStream {
             // check the first entry
             if entry.key() <= &self.next_seq {
                 // take the fist entry (list of chunks) (multimap)
-                let mut data_chunks = self.delayed.pop_first().unwrap();
+                let (key, mut chunk_list) = self.delayed.pop_first().unwrap();
                 // take first data chunk
-                let chunk = data_chunks.1.remove(0);
-                // reinsert (prev pop) if we have multiple entries
-                if !data_chunks.1.is_empty() {
-                    self.delayed.insert(data_chunks.0, data_chunks.1);
+                let chunk = chunk_list.remove(0);
+                // reinsert remaining chunks if we have multiple entries
+                if !chunk_list.is_empty() {
+                    self.delayed.insert(key, chunk_list);
                 }
                 let packet = pdu::TcpPdu::new(&chunk).unwrap();
                 self.accept_packet(packet);
@@ -263,6 +277,7 @@ impl Iterator for Reassembler {
             Some((key, val)) => {
                 let stream_cloned = Arc::clone(&val);
                 let mut stream_mut_ref = stream_cloned.lock().unwrap();
+                // trigger reassembly
                 stream_mut_ref.check_delayed();
                 Some((
                     key,
