@@ -27,10 +27,12 @@ enum Commands {
     Clean,
     /// Run the generated tests in the attacks folder on the compliled libraries in the libs folder
     TestLib {
+        /// specify the name of the library to test
         #[clap(short, long)]
-        name: Option<String>,
-        #[clap(long)]
-        no_error: bool,
+        lib: Option<String>,
+        /// specify the name of the test to run
+        #[clap(short, long)]
+        test: Option<String>,
     },
     /// Run the the generated tests in the attacks folder on an live target
     TestOs {
@@ -104,7 +106,7 @@ fn main() {
             }
         }
 
-        Commands::TestLib { name, no_error } => {
+        Commands::TestLib { lib, test } => {
             // check dir bins_to_test empty/exists
             let bin_dir_empty = PathBuf::from("./bins_to_test/")
                 .read_dir()
@@ -117,20 +119,26 @@ fn main() {
                 process::exit(1);
             }
             // find pcap files
-            for entry in glob("./attacks/*.pcap").expect("Failes to read glob pattern") {
+            let test_name = match test {
+                None => "*",
+                Some(s) => s,
+            };
+            let g = glob(&format!("./attacks/{}.pcap", test_name).to_string())
+                .expect("Failes to read glob pattern");
+            for entry in g {
                 match entry {
                     Ok(attack_path) => {
                         println!("==={}===", attack_path.display());
-                        if let Some(name) = name {
+                        if let Some(lib) = lib {
                             let mut bin = PathBuf::from("./bins_to_test");
-                            bin.push(name);
-                            run_test_on_bin(PathBuf::from(bin), attack_path.clone(), *no_error);
+                            bin.push(lib);
+                            run_test_on_bin(PathBuf::from(bin), attack_path.clone());
                         } else {
                             for bin_entry in
                                 glob("./bins_to_test/*").expect("Failes to read glob pattern")
                             {
                                 match bin_entry {
-                                    Ok(bin) => run_test_on_bin(bin, attack_path.clone(), *no_error),
+                                    Ok(bin) => run_test_on_bin(bin, attack_path.clone()),
                                     Err(e) => println!("{:?}", e),
                                 }
                             }
@@ -169,7 +177,7 @@ fn main() {
     }
 }
 
-fn run_test_on_bin(bin: PathBuf, attack_path: PathBuf, no_error: bool) {
+fn run_test_on_bin(bin: PathBuf, attack_path: PathBuf) {
     let bin_name = bin.clone();
     let mut real_bin = bin;
     if real_bin.is_dir() {
@@ -180,7 +188,17 @@ fn run_test_on_bin(bin: PathBuf, attack_path: PathBuf, no_error: bool) {
         .args(["-f", attack_path.display().to_string().as_str()])
         .output()
         .expect("failed to execute process");
-    if !no_error || output.status == ExitStatus::from_raw(0) {
-        println!("{:?}, {:?}", output, bin_name);
+    if output.status == ExitStatus::from_raw(0) {
+        println!(
+            "{}, {}, {:?}",
+            String::from_utf8_lossy(&output.stdout),
+            output.status,
+            bin_name
+        );
+        if !output.stderr.is_empty() {
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+        }
+    } else {
+        print!("{:?}", output);
     }
 }
