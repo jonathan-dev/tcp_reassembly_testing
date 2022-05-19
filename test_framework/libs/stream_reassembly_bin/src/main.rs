@@ -1,11 +1,5 @@
-use std::net::Ipv4Addr;
 use std::path::PathBuf;
-
-use stream_reassembly::{
-    self,
-    reassembler::{self, FlowKey},
-    PcapReassembler,
-};
+use stream_reassembly::{self, PcapReassembler};
 
 use clap::Parser;
 
@@ -26,9 +20,11 @@ fn main() {
     if let Some(config_path) = cli.file.as_deref() {
         let mut reassembler = PcapReassembler::read_file(config_path, cli.filter.as_deref());
 
+        // print one direction
         if let Some(stream_data) = reassembler.next() {
             print!("{}", String::from_utf8_lossy(&stream_data.1))
         }
+        // print the other direction
         if let Some(stream_data) = reassembler.next() {
             print!("{}", String::from_utf8_lossy(&stream_data.1))
         }
