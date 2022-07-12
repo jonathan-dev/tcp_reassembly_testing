@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 
 use stream_reassembly::{self, reassembler::FlowKey, PcapReassembler};
@@ -22,8 +22,8 @@ fn main() {
     if let Some(config_path) = cli.file.as_deref() {
         // println!("Value for file: {}", config_path.display());
         let key_of_interest = FlowKey {
-            src: (Ipv4Addr::new(127, 0, 0, 1), 6001),
-            dst: (Ipv4Addr::new(127, 0, 0, 1), 6000),
+            src: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6001),
+            dst: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 6000),
         };
 
         let mut reassembler = PcapReassembler::read_file(config_path, cli.filter.as_deref());

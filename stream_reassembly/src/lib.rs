@@ -1,3 +1,38 @@
+/*!
+This crate provides TCP stream reassembly for Pcap files.
+
+This crate defines two primary types:
+
+* [`PcapReassembler`] which only provides one method: [`PcapReassembler::read_file`] this method
+  takes a pcap file and a Berkly filter and returns the other important type the [`Reassembler`]
+* [`Reassembler`] contains all the reassembly logic. The interaction with it happens solely over the
+  Iterator implementation it offers. The itterator returns a tuples of Tcp stream identification
+  ([`reassembler::FlowKey`]), The reassembled Stream (as Vec<u8>) and a vector containing all inconsistencies
+  ([`reassembler::Inconsistency`]) between retansmissions and the originally sent data.
+
+Usage example:
+```
+use std::path::PathBuf;
+use stream_reassembly::{self, PcapReassembler};
+
+fn main() {
+    let file = PathBuf::from("../../attacks/myattackment.pcap");
+    // see https://biot.com/capstats/bpf.html for filter syntax
+    let filter = Some("tcp port 6000 or tcp port 6001");
+
+    let mut reassembler = PcapReassembler::read_file(file, filter);
+
+    // print one direction
+    if let Some(stream_data) = reassembler.next() {
+        print!("{}", String::from_utf8_lossy(&stream_data.1))
+    }
+    // print the other direction
+    if let Some(stream_data) = reassembler.next() {
+        print!("{}", String::from_utf8_lossy(&stream_data.1))
+    }
+}
+```
+*/
 #![feature(map_first_last)]
 pub mod reassembler;
 

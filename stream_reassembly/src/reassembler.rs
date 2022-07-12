@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use log::info;
 use pdu::Tcp;
 use pdu::*;
@@ -212,7 +211,7 @@ pub struct Reassembler {
 }
 
 impl Reassembler {
-    pub fn new() -> Reassembler {
+    pub(crate) fn new() -> Reassembler {
         Reassembler {
             streams: BTreeMap::new(),
         }
@@ -220,7 +219,7 @@ impl Reassembler {
 
     /// Choose or create stream in hashmap (depending on src port/ip and dst port/ip)
     /// on newly created streams try to set the partner stream
-    pub fn process(&mut self, ip_packet: Ipv4Pdu) {
+    pub(crate) fn process(&mut self, ip_packet: Ipv4Pdu) {
         if let Ok(Ipv4::Tcp(tcp_packet)) = ip_packet.inner() {
             let key = FlowKey {
                 src: SocketAddrV4::new(
@@ -273,11 +272,12 @@ impl Iterator for Reassembler {
     type Item = (FlowKey, Vec<u8>, Vec<Inconsistency>);
 
     fn next(&mut self) -> Option<Self::Item> {
+        // yield one stream at a time
         let ret_val = match self.streams.pop_first() {
             Some((key, val)) => {
                 let stream_cloned = Arc::clone(&val);
                 let mut stream_mut_ref = stream_cloned.lock().unwrap();
-                // trigger reassembly
+                // trigger complete reassembly
                 stream_mut_ref.check_delayed();
                 Some((
                     key,
